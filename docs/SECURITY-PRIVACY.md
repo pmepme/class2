@@ -2,7 +2,7 @@
 
 ## 현재 MVP의 범위
 
-현재는 실제 개인정보를 사용하지 않는 가상 데이터만 포함한다. 인증 세션과 데모 데이터는 브라우저 `localStorage`에 저장되며, 이는 개발·UX 검증용이다. 기관 운영 환경의 인증·권한·개인정보 저장소로 사용하면 안 된다.
+현재 인증은 Apps Script의 `Students` 시트에 있는 이름·학번/사번을 사용하며, 인증 세션과 교육·수강 데모 데이터는 브라우저 `localStorage`에 저장된다. 이는 개발·UX 검증용이며, 기관 운영 환경의 인증·권한·개인정보 저장소로 사용하면 안 된다.
 
 ## 반드시 지킬 원칙
 
@@ -17,7 +17,7 @@
 
 ## Apps Script 어댑터
 
-Apps Script 사용 시 `Students` 시트의 `user_id`, `name`, `student_or_employee_no`, `active` 열을 백엔드 어댑터가 읽고, 브라우저에는 승인 여부·내부 user_id·표시 이름만 반환한다. 외부 연동 오류는 fail-closed로 처리한다.
+Apps Script 사용 시 `Students` 시트의 `user_id`, `name`, `student_or_employee_no`, `active`, `role` 열을 adapter가 읽고, 일반 참여자는 `verify_student`, 관리자는 `verify_admin`으로 검증한다. 브라우저에는 승인 여부·내부 user_id·표시 이름만 반환한다. 외부 연동 오류는 fail-closed로 처리한다.
 
 ## 추가 확인 필요
 

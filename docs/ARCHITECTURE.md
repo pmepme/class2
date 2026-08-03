@@ -10,7 +10,7 @@ React + Vite SPA
        └─ browser localStorage (가상 데이터 전용)
 ```
 
-현재 프로젝트는 빈 저장소에서 시작했기 때문에 백엔드 없이 핵심 UX를 검증할 수 있는 프론트엔드 MVP로 구성했다. `src/lib/storage.js`가 저장소 경계를 제공하므로 API·DB로 교체할 때 화면 컴포넌트가 직접 localStorage를 다루지 않는다.
+현재 프로젝트는 백엔드 없이 핵심 UX를 검증하는 프론트엔드 MVP로 구성했다. 일반 학습자와 관리자 인증은 Apps Script adapter를 통해 `Students` 시트를 실시간 대조하고, 교육·수강 데이터는 데모용 localStorage를 사용한다. `src/lib/storage.js`가 저장소 경계를 제공하므로 API·DB로 교체할 때 화면 컴포넌트가 직접 localStorage를 다루지 않는다.
 
 ## 상용화 목표 구조
 
@@ -47,7 +47,7 @@ interface AuthProvider {
 }
 ```
 
-브라우저가 Google Sheets/Apps Script를 직접 호출하지 않도록 백엔드의 `POST /api/auth/verify` 뒤에 어댑터를 둔다. SSO를 사용할 수 있게 되면 동일 인터페이스의 OIDC/SAML provider로 교체한다.
+현재 프로토타입은 일반 참여자·관리자 인증을 위해 브라우저가 Apps Script endpoint를 직접 호출한다. 정식 운영에서는 브라우저가 Google Sheets/Apps Script를 직접 호출하지 않도록 백엔드의 `POST /api/auth/verify` 뒤에 adapter를 두고, 브라우저에 노출되는 API secret을 제거한다. SSO를 사용할 수 있게 되면 동일 인터페이스의 OIDC/SAML provider로 교체한다.
 
 ## 영상 진행률
 

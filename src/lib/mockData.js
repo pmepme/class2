@@ -15,6 +15,7 @@ export const initialCourses = [
     published: true,
     updatedAt: '2026. 03. 02',
     materialName: '학술정보관_이용_가이드.pdf',
+    materials: [{ id: 'material-library-guide', name: '학술정보관_이용_가이드.pdf', url: '#' }],
   },
   {
     id: 'course-search',
@@ -32,6 +33,7 @@ export const initialCourses = [
     published: true,
     updatedAt: '2026. 03. 10',
     materialName: '논문_검색_치트시트.pdf',
+    materials: [{ id: 'material-search', name: '논문_검색_치트시트.pdf', url: '#' }],
   },
   {
     id: 'course-citation',
@@ -49,6 +51,7 @@ export const initialCourses = [
     published: true,
     updatedAt: '2026. 03. 15',
     materialName: '인용_참고문헌_템플릿.docx',
+    materials: [{ id: 'material-citation', name: '인용_참고문헌_템플릿.docx', url: '#' }],
   },
   {
     id: 'course-database',
@@ -66,6 +69,7 @@ export const initialCourses = [
     published: true,
     updatedAt: '2026. 03. 21',
     materialName: '전공별_DB_가이드.pdf',
+    materials: [{ id: 'material-database', name: '전공별_DB_가이드.pdf', url: '#' }],
   },
 ];
 

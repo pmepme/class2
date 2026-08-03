@@ -13,8 +13,28 @@ function write(key, value) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function normalizeCourse(course) {
+  const legacyMaterials = course.materialName
+    ? [{ id: `${course.id}-material-1`, name: course.materialName, url: course.materialUrl || '#' }]
+    : [];
+  const materials = (Array.isArray(course.materials) ? course.materials : legacyMaterials)
+    .filter((material) => material && material.name)
+    .map((material, index) => ({
+      id: material.id || `${course.id}-material-${index + 1}`,
+      name: material.name,
+      url: material.url || '#',
+    }));
+  return { ...course, materials, materialName: materials[0]?.name || '' };
+}
+
 export function getSession() {
-  return read(storageKeys.session, null);
+  const session = read(storageKeys.session, null);
+  // 이전 데모에서 만들어진 localStorage 세션은 Apps Script 재인증을 거치도록 폐기합니다.
+  if (session && session.authProvider !== 'apps-script') {
+    window.localStorage.removeItem(storageKeys.session);
+    return null;
+  }
+  return session;
 }
 
 export function setSession(user) {
@@ -23,11 +43,11 @@ export function setSession(user) {
 }
 
 export function getCourses() {
-  return read(storageKeys.courses, initialCourses);
+  return read(storageKeys.courses, initialCourses).map(normalizeCourse);
 }
 
 export function saveCourses(courses) {
-  write(storageKeys.courses, courses);
+  write(storageKeys.courses, courses.map(normalizeCourse));
 }
 
 export function getStudents() {
