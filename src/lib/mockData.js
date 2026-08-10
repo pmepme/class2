@@ -73,27 +73,9 @@ export const initialCourses = [
   },
 ];
 
-export const initialStudents = [
-  { userId: 'u-minseo', name: '김민서', identifier: '20261234', role: 'student', active: true },
-  { userId: 'u-aisha', name: 'Aisha Rahman', identifier: '20250117', role: 'student', active: true },
-  { userId: 'u-junho', name: '이준호', identifier: '20241108', role: 'student', active: true },
-  { userId: 'u-admin', name: '교육 담당자', identifier: 'ADMIN2026', role: 'admin', active: true },
-];
+export const initialStudents = [];
 
-export const initialEnrollments = {
-  'u-minseo': {
-    'course-library-guide': { enrolledAt: '2026-03-12', progress: 68, lastPosition: 734 },
-    'course-search': { enrolledAt: '2026-03-18', progress: 34, lastPosition: 490 },
-    'course-citation': { enrolledAt: '2026-03-22', progress: 100, lastPosition: 1260 },
-  },
-  'u-aisha': {
-    'course-library-guide': { enrolledAt: '2026-03-11', progress: 52, lastPosition: 565 },
-  },
-  'u-junho': {
-    'course-search': { enrolledAt: '2026-03-17', progress: 12, lastPosition: 170 },
-    'course-database': { enrolledAt: '2026-03-20', progress: 100, lastPosition: 1920 },
-  },
-};
+export const initialEnrollments = {};
 
 export const categories = ['전체', '도서관 이용', '연구·학습', '전자자료'];
 

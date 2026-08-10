@@ -105,7 +105,7 @@ export async function getSafeUser(supabase) {
   return {
     userId: authUser.id,
     email,
-    displayName: profile?.display_name || email.split('@')[0],
+    displayName: email,
     role,
     onboardingCompleted: Boolean(profile?.onboarding_completed),
   };

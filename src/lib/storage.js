@@ -38,7 +38,7 @@ export function saveCourses(courses) {
 }
 
 export function getStudents() {
-  return read(storageKeys.students, initialStudents);
+  return read(storageKeys.students, initialStudents).filter((student) => student && student.email);
 }
 
 export function saveStudents(students) {
@@ -46,17 +46,13 @@ export function saveStudents(students) {
 }
 
 export function getEnrollments() {
-  return read(storageKeys.enrollments, initialEnrollments);
+  return Object.fromEntries(Object.entries(read(storageKeys.enrollments, initialEnrollments)).filter(([userId]) => {
+    return getStudents().some((student) => student.userId === userId);
+  }));
 }
 
 export function saveEnrollments(enrollments) {
   write(storageKeys.enrollments, enrollments);
-}
-
-export function resetDemoData() {
-  saveCourses(initialCourses);
-  saveStudents(initialStudents);
-  saveEnrollments(initialEnrollments);
 }
 
 export function ensureEnrollment(enrollments, userId, courseId) {

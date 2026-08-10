@@ -2,8 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   categories,
   initialCourses,
-  initialEnrollments,
-  initialStudents,
   storageKeys,
 } from './lib/mockData';
 import {
@@ -11,13 +9,12 @@ import {
   getCourses,
   getEnrollments,
   getStudents,
-  resetDemoData,
   saveCourses,
   saveEnrollments,
   saveStudents,
 } from './lib/storage';
 import {
-  ADMIN_EMAIL,
+  HANYANG_DOMAIN,
   getAuthSession,
   isAdminSession,
   OTP_LENGTH,
@@ -61,7 +58,6 @@ function App() {
   const [view, setView] = useState('home');
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [authReason, setAuthReason] = useState('');
-  const [authMode, setAuthMode] = useState('student');
   const [notice, setNotice] = useState(null);
   const [language, setLanguage] = useState('KR');
 
@@ -88,7 +84,7 @@ function App() {
   }, []);
 
   const navigateHome = () => { setView('home'); setSelectedCourse(null); };
-  const openAuth = (reason = '', mode = 'student') => { setAuthReason(reason); setAuthMode(mode); setView('auth'); };
+  const openAuth = (reason = '') => { setAuthReason(reason); setView('auth'); };
   const handleSignOut = async () => {
     try { await signOut(); } finally {
       setSessionState(null);
@@ -96,12 +92,9 @@ function App() {
       navigateHome();
     }
   };
-  const openAdmin = () => {
-    if (isAdminSession(session)) setView('admin');
-    else openAuth('', 'admin');
-  };
-  const handleAuth = async ({ email, token, purpose }) => {
-    const result = await verifyEmailOtp({ email, token, purpose });
+  const openAdmin = () => { if (isAdminSession(session)) setView('admin'); };
+  const handleAuth = async ({ email, token }) => {
+    const result = await verifyEmailOtp({ email, token });
     if (!result.approved) return result;
     const user = {
       userId: result.user.userId,
@@ -111,17 +104,27 @@ function App() {
       authProvider: 'supabase-email-otp',
       authenticatedAt: new Date().toISOString(),
     };
+    setStudents((currentStudents) => {
+      const nextStudent = {
+        userId: user.userId,
+        email: user.email,
+        name: user.email,
+        identifier: user.email,
+        role: user.role,
+        active: true,
+      };
+      return currentStudents.some((student) => student.userId === nextStudent.userId)
+        ? currentStudents.map((student) => student.userId === nextStudent.userId ? { ...student, ...nextStudent } : student)
+        : [...currentStudents, nextStudent];
+    });
     setSessionState(user);
     setNotice({ type: 'success', text: `${user.email} 이메일 인증이 완료되었습니다.` });
-    if (purpose === 'admin') {
-      setView('admin');
-    } else if (authReason && courses.some((course) => course.id === authReason)) {
+    if (authReason && courses.some((course) => course.id === authReason)) {
       const course = courses.find((item) => item.id === authReason);
       setSelectedCourse(course);
       setView('home');
     } else setView('home');
     setAuthReason('');
-    setAuthMode('student');
     return { ...result, approved: true };
   };
   const askToEnroll = (course) => {
@@ -151,25 +154,15 @@ function App() {
     };
     setEnrollments(next);
   };
-  const reset = () => {
-    resetDemoData();
-    setCourses(initialCourses);
-    setStudents(initialStudents);
-    setEnrollments(initialEnrollments);
-    setSessionState(null);
-    setView('home');
-    setNotice({ type: 'info', text: '데모 데이터가 초기화되었습니다.' });
-  };
-
   return <div className="app-shell">
     <Header session={session} view={view} language={language} setLanguage={setLanguage} onHome={navigateHome} onAuth={() => openAuth()} onMyPage={() => session ? setView('mypage') : openAuth()} onAdmin={openAdmin} onSignOut={handleSignOut} />
     {notice && <Toast notice={notice} onClose={() => setNotice(null)} />}
     <main>
       {view === 'home' && <HomePage courses={courses} session={session} enrollments={enrollments} language={language} onSelect={askToEnroll} onAuth={() => openAuth()} />}
-      {view === 'auth' && <AuthPage onRequestOtp={requestEmailOtp} onSubmit={handleAuth} onBack={navigateHome} reason={authReason} language={language} mode={authMode} />}
+      {view === 'auth' && <AuthPage onRequestOtp={requestEmailOtp} onSubmit={handleAuth} onBack={navigateHome} reason={authReason} language={language} />}
       {view === 'learn' && selectedCourse && session && <LearnPage course={selectedCourse} enrollment={enrollments[session.userId]?.[selectedCourse.id]} onBack={navigateHome} onProgress={updateProgress} onDownload={(course, material) => setNotice({ type: 'success', text: `${material?.name || course.materialName || '강의자료'} 다운로드를 시작합니다.` })} />}
       {view === 'mypage' && session && <MyPage session={session} courses={courses} enrollments={enrollments[session.userId] || {}} onSelect={askToEnroll} onHome={navigateHome} />}
-      {view === 'admin' && isAdminSession(session) && <AdminPage courses={courses} setCourses={setCourses} students={students} setStudents={setStudents} enrollments={enrollments} onReset={reset} onNotice={setNotice} />}
+      {view === 'admin' && isAdminSession(session) && <AdminPage courses={courses} setCourses={setCourses} students={students} setStudents={setStudents} enrollments={enrollments} onNotice={setNotice} />}
     </main>
     <Footer />
     {selectedCourse && view === 'home' && <EnrollmentModal course={selectedCourse} onConfirm={enroll} onCancel={() => setSelectedCourse(null)} />}
@@ -187,7 +180,7 @@ function Header({ session, view, language, setLanguage, onHome, onAuth, onMyPage
       <nav className={`main-nav ${mobileOpen ? 'is-open' : ''}`} aria-label="주요 메뉴">
         <button className={view === 'home' ? 'active' : ''} onClick={() => { onHome(); setMobileOpen(false); }}>교육 둘러보기</button>
         <button className={view === 'mypage' ? 'active' : ''} onClick={() => { onMyPage(); setMobileOpen(false); }}>내 학습</button>
-        <button className={view === 'admin' ? 'active' : ''} onClick={() => { onAdmin(); setMobileOpen(false); }}>관리자</button>
+        {isAdminSession(session) && <button className={view === 'admin' ? 'active' : ''} onClick={() => { onAdmin(); setMobileOpen(false); }}>관리자</button>}
       </nav>
       <div className="header-actions">
         <button className="language-toggle" onClick={() => setLanguage(language === 'KR' ? 'EN' : 'KR')} aria-label="언어 변경">{language === 'KR' ? 'EN' : 'KR'}</button>
@@ -222,8 +215,8 @@ function CourseCard({ course, enrollment, onSelect, index }) {
   return <article className={`course-card accent-${course.accent}`} style={{ '--delay': `${index * 70}ms` }}><div className="course-art"><div className="art-grain" /><span className="art-label">{course.category}</span><div className="art-symbol"><Icon name={course.category === '전자자료' ? 'search' : course.category === '연구·학습' ? 'chart' : 'book'} size={32} /></div><span className="art-index">0{index + 1}</span></div><div className="course-card-body"><div className="course-meta"><span>{course.level}</span><span>{course.duration}</span></div><h3>{course.title}</h3><p>{course.subtitle}</p><div className="course-footer"><div>{enrollment ? <><span className={`status-dot ${progress >= 50 ? 'done' : 'ongoing'}`} />{progress >= 50 ? '수강 완료' : `수강 중 ${progress}%`}</> : <>{course.audience}</>}</div><button className="card-arrow" onClick={() => onSelect(course)} aria-label={`${course.title} 수강하기`}><Icon name="arrow" size={17} /></button></div>{enrollment && <div className="mini-progress"><span style={{ width: `${progress}%` }} /></div>}</div></article>;
 }
 
-function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language, mode = 'student' }) {
-  const isAdmin = mode === 'admin';
+function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language }) {
+  const [emailId, setEmailId] = useState('');
   const [email, setEmail] = useState('');
   const [token, setToken] = useState('');
   const [step, setStep] = useState('email');
@@ -238,19 +231,20 @@ function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language, mode = 'st
     return () => window.clearInterval(timer);
   }, [cooldown]);
 
-  const normalizeEmailInput = (value) => value.trim().toLowerCase();
+  const normalizeEmailIdInput = (value) => value.trim().toLowerCase().replace(/@hanyang\.ac\.kr$/i, '');
   const sendOtp = async (event) => {
     event?.preventDefault();
-    const normalizedEmail = normalizeEmailInput(email);
+    const normalizedId = normalizeEmailIdInput(emailId);
+    const normalizedEmail = `${normalizedId}@${HANYANG_DOMAIN}`;
     setError('');
     setMessage('');
-    if (!normalizedEmail) { setError('한양대학교 이메일을 입력해 주세요.'); return; }
-    if (!normalizedEmail.endsWith('@hanyang.ac.kr')) { setError('한양대학교 이메일(@hanyang.ac.kr)만 사용할 수 있습니다.'); return; }
-    if (isAdmin && normalizedEmail !== ADMIN_EMAIL) { setError(`관리자 인증은 ${ADMIN_EMAIL} 계정만 사용할 수 있습니다.`); return; }
+    if (!normalizedId) { setError('한양대학교 이메일 아이디를 입력해 주세요.'); return; }
+    if (normalizedId.includes('@') || /\s/.test(normalizedId)) { setError('이메일 아이디만 입력해 주세요.'); return; }
     if (cooldown > 0) return;
     setIsSubmitting(true);
     try {
-      await onRequestOtp({ email: normalizedEmail, purpose: mode });
+      await onRequestOtp({ email: normalizedEmail });
+      setEmailId(normalizedId);
       setEmail(normalizedEmail);
       setStep('otp');
       setCooldown(60);
@@ -268,7 +262,7 @@ function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language, mode = 'st
     if (normalizedToken.length !== OTP_LENGTH) { setError(`인증번호 ${OTP_LENGTH}자리를 입력해 주세요.`); return; }
     setIsSubmitting(true);
     try {
-      const result = await onSubmit({ email, token: normalizedToken, purpose: mode });
+      const result = await onSubmit({ email, token: normalizedToken });
       if (!result?.approved) setError(result?.message || '인증번호가 올바르지 않거나 만료되었습니다.');
     } catch (submitError) {
       setError(submitError.message || '인증 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.');
@@ -277,7 +271,7 @@ function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language, mode = 'st
     }
   };
   const changeEmail = () => { setStep('email'); setToken(''); setError(''); setMessage(''); };
-  return <section className={`auth-page page-width ${isAdmin ? 'admin-auth-page' : ''}`}><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> {isAdmin ? 'RESTRICTED ACCESS' : 'HANYANG EMAIL ACCESS'}</p><h1>{isAdmin ? <>관리자 페이지는<br /><span>승인된 계정</span>만 이용할 수 있어요.</> : <>학습을 시작하기 전,<br /><span>이메일 인증</span>이 필요해요.</>}</h1><p>{isAdmin ? `${ADMIN_EMAIL} 계정으로만 관리자 화면에 접근할 수 있습니다.` : `한양대학교 이메일로 받은 ${OTP_LENGTH}자리 인증번호를 입력하면 회원가입과 로그인이 한 번에 완료됩니다.`}</p><div className="privacy-note"><Icon name="lock" size={17} /><span>인증 토큰은 브라우저 저장소에 보관하지 않고 보안 쿠키 세션으로 처리합니다.</span></div></div><form className="auth-card" onSubmit={step === 'email' ? sendOtp : verifyOtp}><div className="auth-card-heading"><span className="step-pill">{step === 'email' ? 'STEP 01 / EMAIL' : 'STEP 02 / OTP'}</span><h2>{step === 'email' ? (isAdmin ? '관리자 이메일 입력' : language === 'EN' ? 'Verify your Hanyang email' : '한양대학교 이메일 인증') : '인증번호 입력'}</h2><p>{step === 'email' ? '@hanyang.ac.kr 이메일만 사용할 수 있습니다.' : `${email}로 발송된 ${OTP_LENGTH}자리 숫자를 입력해 주세요.`}</p></div>{step === 'email' ? <label>한양대학교 이메일<input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="name@hanyang.ac.kr" autoComplete="email" autoFocus required /></label> : <><label>인증번호<input className="otp-input" value={token} onChange={(event) => { setToken(event.target.value.replace(/\D/g, '').slice(0, OTP_LENGTH)); setError(''); }} onPaste={(event) => { event.preventDefault(); setToken(event.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH)); }} inputMode="numeric" maxLength={OTP_LENGTH} autoComplete="one-time-code" autoFocus required /></label><div className="otp-actions"><button type="button" className="inline-button" onClick={changeEmail}>이메일 수정</button><button type="button" className="inline-button" onClick={sendOtp} disabled={cooldown > 0 || isSubmitting}>{cooldown > 0 ? `${cooldown}초 후 재전송` : '인증번호 재전송'}</button></div></>}{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}{message && !error && <div className="form-success" role="status"><Icon name="check" size={16} />{message}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting || (step === 'email' && cooldown > 0)}>{isSubmitting ? '처리 중...' : step === 'email' ? '인증번호 받기' : '인증하고 계속하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button>{step === 'otp' && <button type="button" className="text-button auth-secondary-action" onClick={changeEmail}>다른 이메일로 시작하기</button>}<div className="demo-login"><span>{isAdmin ? 'ADMIN POLICY' : 'EMAIL POLICY'}</span><p>{isAdmin ? `${ADMIN_EMAIL} 외 계정은 관리자 권한을 받을 수 없습니다.` : '실제 재학 여부가 아니라 @hanyang.ac.kr 이메일 소유 여부만 확인합니다.'}</p></div></form></div>{reason && <p className="auth-context">선택한 교육을 계속 신청하려면 먼저 이메일 인증을 완료해 주세요.</p>}</section>;
+  return <section className="auth-page page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> HANYANG EMAIL ACCESS</p><h1>학습을 시작하기 전,<br /><span>이메일 인증</span>이 필요해요.</h1><p>한양대학교 이메일로 받은 {OTP_LENGTH}자리 인증번호를 입력하면 회원가입과 로그인이 한 번에 완료됩니다.</p><div className="privacy-note"><Icon name="lock" size={17} /><span>인증 토큰은 브라우저 저장소에 보관하지 않고 보안 쿠키 세션으로 처리합니다.</span></div></div><form className="auth-card" onSubmit={step === 'email' ? sendOtp : verifyOtp}><div className="auth-card-heading"><span className="step-pill">{step === 'email' ? 'STEP 01 / EMAIL' : 'STEP 02 / OTP'}</span><h2>{step === 'email' ? (language === 'EN' ? 'Verify your Hanyang email' : '한양대학교 이메일 인증') : '인증번호 입력'}</h2><p>{step === 'email' ? `@${HANYANG_DOMAIN} 이메일 아이디를 입력해 주세요.` : `${email}로 발송된 ${OTP_LENGTH}자리 숫자를 입력해 주세요.`}</p></div>{step === 'email' ? <label>한양대학교 이메일<div className="email-input-wrap"><input type="text" value={emailId} onChange={(event) => { setEmailId(event.target.value); setError(''); }} placeholder="name" autoComplete="username" autoFocus required aria-label="한양대학교 이메일 아이디" /><span className="email-input-suffix">@{HANYANG_DOMAIN}</span></div></label> : <><label>인증번호<input className="otp-input" value={token} onChange={(event) => { setToken(event.target.value.replace(/\D/g, '').slice(0, OTP_LENGTH)); setError(''); }} onPaste={(event) => { event.preventDefault(); setToken(event.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH)); }} inputMode="numeric" maxLength={OTP_LENGTH} autoComplete="one-time-code" autoFocus required /></label><div className="otp-actions"><button type="button" className="inline-button" onClick={changeEmail}>이메일 수정</button><button type="button" className="inline-button" onClick={sendOtp} disabled={cooldown > 0 || isSubmitting}>{cooldown > 0 ? `${cooldown}초 후 재전송` : '인증번호 재전송'}</button></div></>}{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}{message && !error && <div className="form-success" role="status"><Icon name="check" size={16} />{message}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting || (step === 'email' && cooldown > 0)}>{isSubmitting ? '처리 중...' : step === 'email' ? '인증번호 받기' : '인증하고 계속하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button>{step === 'otp' && <button type="button" className="text-button auth-secondary-action" onClick={changeEmail}>다른 이메일로 시작하기</button>}</form></div>{reason && <p className="auth-context">선택한 교육을 계속 신청하려면 먼저 이메일 인증을 완료해 주세요.</p>}</section>;
 }
 
 function EnrollmentModal({ course, onConfirm, onCancel }) {
@@ -469,10 +463,14 @@ function LearningGroup({ title, courses, enrollments, onSelect, emptyText }) {
   return <section className="learning-group"><div className="group-heading"><h2>{title}</h2><span>{courses.length}</span></div>{courses.length ? <div className="learning-list">{courses.map((course) => <button className="learning-row" key={course.id} onClick={() => onSelect(course)}><div className={`learning-thumb accent-${course.accent}`}><Icon name="play" size={18} /></div><div className="learning-info"><strong>{course.title}</strong><span>{course.category} · {course.duration}</span><div className="row-progress"><i style={{ width: `${enrollments[course.id].progress}%` }} /></div></div><div className="learning-status"><strong>{enrollments[course.id].progress}%</strong><span>{enrollments[course.id].progress >= 50 ? '수강 완료' : '수강 중'}</span></div><Icon name="arrow" size={17} /></button>)}</div> : <div className="group-empty"><Icon name="book" size={22} /><p>{emptyText}</p></div>}</section>;
 }
 
-function AdminPage({ courses, setCourses, students, setStudents, enrollments, onReset, onNotice }) {
+function getStudentEmail(student) {
+  return student?.email || (student?.name?.includes('@') ? student.name : '') || student?.name || student?.identifier || '';
+}
+
+function AdminPage({ courses, setCourses, students, setStudents, enrollments, onNotice }) {
   const [tab, setTab] = useState('overview');
   const allEnrollments = Object.entries(enrollments).flatMap(([userId, items]) => Object.entries(items).map(([courseId, data]) => ({ userId, courseId, ...data })));
-  const exportCsv = () => { const rows = [['student_id', 'student_name', 'course_title', 'progress', 'status', 'enrolled_at'], ...allEnrollments.map((item) => { const student = students.find((person) => person.userId === item.userId); const course = courses.find((lesson) => lesson.id === item.courseId); return [student?.identifier || '', student?.name || '', course?.title || '', `${item.progress}%`, item.progress >= 50 ? '수강 완료' : '수강 중', item.enrolledAt || '']; })]; const csv = '\ufeff' + rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n'); const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); const link = document.createElement('a'); link.href = url; link.download = 'library-learn-enrollments.csv'; link.click(); URL.revokeObjectURL(url); onNotice({ type: 'success', text: '수강 데이터 CSV를 내보냈습니다.' }); };
+  const exportCsv = () => { const rows = [['student_email', 'course_title', 'progress', 'status', 'enrolled_at'], ...allEnrollments.map((item) => { const student = students.find((person) => person.userId === item.userId); const course = courses.find((lesson) => lesson.id === item.courseId); return [getStudentEmail(student), course?.title || '', `${item.progress}%`, item.progress >= 50 ? '수강 완료' : '수강 중', item.enrolledAt || '']; })]; const csv = '\ufeff' + rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n'); const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); const link = document.createElement('a'); link.href = url; link.download = 'library-learn-enrollments.csv'; link.click(); URL.revokeObjectURL(url); onNotice({ type: 'success', text: '수강 데이터 CSV를 내보냈습니다.' }); };
   const toggleStudent = (userId) => setStudents(students.map((student) => student.userId === userId ? { ...student, active: !student.active } : student));
   const toggleCourse = (courseId) => setCourses(courses.map((course) => course.id === courseId ? { ...course, published: !course.published } : course));
   const saveCourse = (nextCourse) => {
@@ -498,7 +496,7 @@ function AdminPage({ courses, setCourses, students, setStudents, enrollments, on
     updatedAt: formatAdminDate(),
     materials: [],
   });
-  return <section className="admin-page page-width"><div className="admin-head"><div><p className="eyebrow">OPERATIONS CONSOLE <span className="demo-pill">PROTECTED</span></p><h1>교육 운영 대시보드</h1><p>학생 인증 명단과 교육 콘텐츠, 수강 현황을 한 곳에서 관리합니다.</p></div><div className="admin-actions"><button className="button button-ghost button-small" onClick={onReset}>데모 초기화</button><button className="button button-dark button-small" onClick={exportCsv}><Icon name="download" size={15} /> 수강 데이터 CSV</button></div></div><div className="admin-tabs">{[['overview','개요'],['students','학생 명단'],['courses','교육 관리'],['enrollments','수강 현황']].map(([id,label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</div>{tab === 'overview' && <><div className="admin-kpis"><Kpi label="등록 학생" value={students.filter((student) => student.role === 'student').length} suffix="명" icon="user" tone="violet" /><Kpi label="공개 교육" value={courses.filter((course) => course.published).length} suffix="개" icon="book" tone="cyan" /><Kpi label="전체 신청" value={allEnrollments.length} suffix="건" icon="chart" tone="orange" /><Kpi label="평균 수강률" value={allEnrollments.length ? Math.round(allEnrollments.reduce((sum, item) => sum + item.progress, 0) / allEnrollments.length) : 0} suffix="%" icon="check" tone="blue" /></div><div className="admin-panels"><div className="admin-panel"><div className="panel-heading"><div><p className="eyebrow">RECENT ACTIVITY</p><h2>최근 수강 신청</h2></div><button onClick={() => setTab('enrollments')}>전체 보기 <Icon name="arrow" size={14} /></button></div>{allEnrollments.slice(-4).reverse().map((item) => { const student = students.find((person) => person.userId === item.userId); const course = courses.find((lesson) => lesson.id === item.courseId); return <div className="activity-row" key={`${item.userId}-${item.courseId}`}><span className="avatar avatar-small">{student?.name.slice(0,1)}</span><div><strong>{student?.name}</strong><span>{course?.title}</span></div><em>{item.progress}%</em></div>; })}</div><div className="admin-panel admin-notice"><span className="notice-icon"><Icon name="settings" size={20} /></span><p className="eyebrow">NEXT STEP</p><h2>실제 운영 전 확인할 것</h2><p>관리자 인증은 연결되었지만, 데이터는 아직 브라우저의 데모 저장소를 사용합니다. 실제 운영 전 백엔드 권한 검증을 추가하세요.</p><button onClick={() => setTab('students')}>명단 관리 열기 <Icon name="arrow" size={14} /></button></div></div></>}{tab === 'students' && <StudentsPanel students={students} onToggle={toggleStudent} />}{tab === 'courses' && <CoursesPanel courses={courses} onToggle={toggleCourse} onSave={saveCourse} onCreate={createCourse} />}{tab === 'enrollments' && <EnrollmentsPanel students={students} courses={courses} items={allEnrollments} />}</section>;
+  return <section className="admin-page page-width"><div className="admin-head"><div><p className="eyebrow">OPERATIONS CONSOLE <span className="demo-pill">PROTECTED</span></p><h1>교육 운영 대시보드</h1><p>학생 인증 명단과 교육 콘텐츠, 수강 현황을 한 곳에서 관리합니다.</p></div><div className="admin-actions"><button className="button button-dark button-small" onClick={exportCsv} disabled={!allEnrollments.length}><Icon name="download" size={15} /> 수강 데이터 CSV</button></div></div><div className="admin-tabs">{[['overview','개요'],['students','학생 명단'],['courses','교육 관리'],['enrollments','수강 현황']].map(([id,label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</div>{tab === 'overview' && <><div className="admin-kpis"><Kpi label="등록 학생" value={students.filter((student) => student.role === 'student').length} suffix="명" icon="user" tone="violet" /><Kpi label="공개 교육" value={courses.filter((course) => course.published).length} suffix="개" icon="book" tone="cyan" /><Kpi label="전체 신청" value={allEnrollments.length} suffix="건" icon="chart" tone="orange" /><Kpi label="평균 수강률" value={allEnrollments.length ? Math.round(allEnrollments.reduce((sum, item) => sum + item.progress, 0) / allEnrollments.length) : 0} suffix="%" icon="check" tone="blue" /></div>{allEnrollments.length > 0 && <div className="admin-panels"><div className="admin-panel"><div className="panel-heading"><div><p className="eyebrow">RECENT ACTIVITY</p><h2>최근 수강 신청</h2></div><button onClick={() => setTab('enrollments')}>전체 보기 <Icon name="arrow" size={14} /></button></div>{allEnrollments.slice(-4).reverse().map((item) => { const student = students.find((person) => person.userId === item.userId); const course = courses.find((lesson) => lesson.id === item.courseId); return <div className="activity-row" key={`${item.userId}-${item.courseId}`}><span className="avatar avatar-small">{getStudentEmail(student).slice(0,1)}</span><div><strong>{getStudentEmail(student)}</strong><span>{course?.title}</span></div><em>{item.progress}%</em></div>; })}</div><div className="admin-panel admin-notice"><span className="notice-icon"><Icon name="settings" size={20} /></span><p className="eyebrow">NEXT STEP</p><h2>실제 운영 전 확인할 것</h2><p>학생 명단과 수강 현황은 실제 이메일 인증과 수강 활동이 발생한 경우에만 표시됩니다. 운영 전에는 백엔드 권한 검증을 추가하세요.</p><button onClick={() => setTab('students')}>명단 관리 열기 <Icon name="arrow" size={14} /></button></div></div>}</>}{tab === 'students' && <StudentsPanel students={students} onToggle={toggleStudent} />}{tab === 'courses' && <CoursesPanel courses={courses} onToggle={toggleCourse} onSave={saveCourse} onCreate={createCourse} />}{tab === 'enrollments' && <EnrollmentsPanel students={students} courses={courses} items={allEnrollments} />}</section>;
 }
 
 function Kpi({ label, value, suffix, icon, tone }) { return <div className={`kpi-card tone-${tone}`}><span className="kpi-icon"><Icon name={icon} size={18} /></span><span>{label}</span><strong>{value}<small>{suffix}</small></strong></div>; }
@@ -509,14 +507,14 @@ function StudentsPanel({ students, onToggle }) {
   const [sort, setSort] = useState('name-asc');
   const visibleStudents = useMemo(() => students
     .filter((student) => status === 'all' || (status === 'active' ? student.active : !student.active))
-    .filter((student) => `${student.name} ${student.identifier} ${student.role}`.toLowerCase().includes(search.trim().toLowerCase()))
+    .filter((student) => `${getStudentEmail(student)} ${student.role}`.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => {
-      if (sort === 'name-desc') return b.name.localeCompare(a.name, 'ko');
+      if (sort === 'name-desc') return getStudentEmail(b).localeCompare(getStudentEmail(a), 'ko');
       if (sort === 'role') return a.role.localeCompare(b.role);
       if (sort === 'status') return Number(b.active) - Number(a.active);
-      return a.name.localeCompare(b.name, 'ko');
+      return getStudentEmail(a).localeCompare(getStudentEmail(b), 'ko');
     }), [students, search, status, sort]);
-  return <div className="table-panel"><div className="panel-heading"><div><p className="eyebrow">ACCESS LIST</p><h2>학생 명단</h2></div><span className="table-count">{visibleStudents.length} / {students.length} students</span></div><div className="admin-data-toolbar"><label className="admin-search"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="이름·학번 검색" aria-label="학생 데이터 검색" /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="학생 상태 필터"><option value="all">상태 전체</option><option value="active">활성만</option><option value="inactive">비활성만</option></select><select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="학생 데이터 정렬"><option value="name-asc">이름 오름차순</option><option value="name-desc">이름 내림차순</option><option value="role">권한순</option><option value="status">활성 상태순</option></select></div><div className="data-table">{visibleStudents.length ? <><div className="table-row table-header"><span>이름</span><span>학번 / 사번</span><span>권한</span><span>상태</span><span /></div>{visibleStudents.map((student) => <div className="table-row" key={student.userId}><span className="name-cell"><span className="avatar avatar-small">{student.name.slice(0,1)}</span><strong>{student.name}</strong></span><span className="mono">{student.identifier}</span><span>{student.role === 'admin' ? '담당자' : '학생'}</span><span><span className={`active-status ${student.active ? 'on' : 'off'}`}><i />{student.active ? '활성' : '비활성'}</span></span><button className="table-action" onClick={() => onToggle(student.userId)}>{student.active ? '비활성화' : '활성화'}</button></div>)}</> : <div className="admin-empty">조건에 맞는 학생이 없습니다.</div>}</div></div>;
+  return <div className="table-panel"><div className="panel-heading"><div><p className="eyebrow">ACCESS LIST</p><h2>학생 명단</h2></div><span className="table-count">{visibleStudents.length} / {students.length} students</span></div><div className="admin-data-toolbar"><label className="admin-search"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="이메일 검색" aria-label="학생 이메일 검색" /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="학생 상태 필터"><option value="all">상태 전체</option><option value="active">활성만</option><option value="inactive">비활성만</option></select><select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="학생 데이터 정렬"><option value="name-asc">이메일 오름차순</option><option value="name-desc">이메일 내림차순</option><option value="role">권한순</option><option value="status">활성 상태순</option></select></div><div className="data-table">{visibleStudents.length ? <><div className="table-row table-header"><span>이메일</span><span>권한</span><span>상태</span><span /></div>{visibleStudents.map((student) => <div className="table-row" key={student.userId}><span className="name-cell"><span className="avatar avatar-small">{getStudentEmail(student).slice(0,1)}</span><strong>{getStudentEmail(student)}</strong></span><span>{student.role === 'admin' ? '담당자' : '학생'}</span><span><span className={`active-status ${student.active ? 'on' : 'off'}`}><i />{student.active ? '활성' : '비활성'}</span></span><button className="table-action" onClick={() => onToggle(student.userId)}>{student.active ? '비활성화' : '활성화'}</button></div>)}</> : <div className="admin-empty">조건에 맞는 학생이 없습니다.</div>}</div></div>;
 }
 
 function CoursesPanel({ courses, onToggle, onSave, onCreate }) {
@@ -589,12 +587,12 @@ function EnrollmentsPanel({ students, courses, items }) {
     .filter((item) => {
       const student = studentById[item.userId];
       const course = courseById[item.courseId];
-      return `${student?.name || ''} ${student?.identifier || ''} ${course?.title || ''}`.toLowerCase().includes(search.trim().toLowerCase());
+      return `${getStudentEmail(student)} ${course?.title || ''}`.toLowerCase().includes(search.trim().toLowerCase());
     })
     .slice()
     .sort((a, b) => {
-      const studentA = studentById[a.userId]?.name || '';
-      const studentB = studentById[b.userId]?.name || '';
+      const studentA = getStudentEmail(studentById[a.userId]);
+      const studentB = getStudentEmail(studentById[b.userId]);
       if (sort === 'student-asc') return studentA.localeCompare(studentB, 'ko');
       if (sort === 'student-desc') return studentB.localeCompare(studentA, 'ko');
       if (sort === 'progress-asc') return a.progress - b.progress;
@@ -605,11 +603,11 @@ function EnrollmentsPanel({ students, courses, items }) {
   const grouped = courses.map((course) => ({ course, items: filteredItems.filter((item) => item.courseId === course.id) })).filter((group) => group.items.length);
   const courseCounts = Object.fromEntries(items.map((item) => [item.courseId, (items.filter((entry) => entry.courseId === item.courseId).length)]));
   const renderGroup = (group) => <section className="enrollment-course-group" key={group.course.id}><div className="enrollment-group-heading"><div><span className={`course-dot accent-${group.course.accent}`} /><div><p className="eyebrow">COURSE GROUP</p><h3>{group.course.title}</h3></div></div><span>{group.items.length}명</span></div><EnrollmentTable students={students} courses={courses} items={group.items} /></section>;
-  return <div className="table-panel"><div className="panel-heading"><div><p className="eyebrow">LEARNING DATA</p><h2>교육별 수강생 현황</h2></div><span className="table-count">{filteredItems.length} / {items.length} records</span></div><div className="enrollment-course-tabs"><button className={courseId === 'all' ? 'selected' : ''} onClick={() => setCourseId('all')}>전체 교육 <span>{items.length}</span></button>{courses.map((course) => <button key={course.id} className={courseId === course.id ? 'selected' : ''} onClick={() => setCourseId(course.id)}>{course.title}<span>{courseCounts[course.id] || 0}</span></button>)}</div><div className="admin-data-toolbar"><label className="admin-search"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="학생명·학번·교육명 검색" aria-label="수강 데이터 검색" /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="수강 상태 필터"><option value="all">수강 상태 전체</option><option value="progressing">수강 중만</option><option value="completed">수강 완료만</option></select><select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="수강 데이터 정렬"><option value="date-desc">신청일 최신순</option><option value="date-asc">신청일 오래된순</option><option value="student-asc">학생명 오름차순</option><option value="student-desc">학생명 내림차순</option><option value="progress-desc">수강률 높은순</option><option value="progress-asc">수강률 낮은순</option></select></div>{filteredItems.length ? courseId === 'all' ? grouped.map(renderGroup) : renderGroup({ course: courseById[courseId], items: filteredItems }) : <div className="admin-empty">조건에 맞는 수강 데이터가 없습니다.</div>}</div>;
+  return <div className="table-panel"><div className="panel-heading"><div><p className="eyebrow">LEARNING DATA</p><h2>교육별 수강생 현황</h2></div><span className="table-count">{filteredItems.length} / {items.length} records</span></div><div className="enrollment-course-tabs"><button className={courseId === 'all' ? 'selected' : ''} onClick={() => setCourseId('all')}>전체 교육 <span>{items.length}</span></button>{courses.map((course) => <button key={course.id} className={courseId === course.id ? 'selected' : ''} onClick={() => setCourseId(course.id)}>{course.title}<span>{courseCounts[course.id] || 0}</span></button>)}</div><div className="admin-data-toolbar"><label className="admin-search"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="이메일·교육명 검색" aria-label="수강 데이터 검색" /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="수강 상태 필터"><option value="all">수강 상태 전체</option><option value="progressing">수강 중만</option><option value="completed">수강 완료만</option></select><select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="수강 데이터 정렬"><option value="date-desc">신청일 최신순</option><option value="date-asc">신청일 오래된순</option><option value="student-asc">이메일 오름차순</option><option value="student-desc">이메일 내림차순</option><option value="progress-desc">수강률 높은순</option><option value="progress-asc">수강률 낮은순</option></select></div>{filteredItems.length ? courseId === 'all' ? grouped.map(renderGroup) : renderGroup({ course: courseById[courseId], items: filteredItems }) : <div className="admin-empty">조건에 맞는 수강 데이터가 없습니다.</div>}</div>;
 }
 
 function EnrollmentTable({ students, courses, items }) {
-  return <div className="data-table"><div className="table-row table-header"><span>학생</span><span>교육</span><span>신청일</span><span>수강률</span><span>상태</span></div>{items.map((item) => { const student = students.find((person) => person.userId === item.userId); const course = courses.find((lesson) => lesson.id === item.courseId); return <div className="table-row" key={`${item.userId}-${item.courseId}`}><span className="name-cell"><span className="avatar avatar-small">{student?.name.slice(0,1)}</span><strong>{student?.name || '알 수 없는 학생'}</strong></span><span>{course?.title || '삭제된 교육'}</span><span className="mono">{item.enrolledAt}</span><span className="progress-cell"><i><b style={{ width: `${item.progress}%` }} /></i>{item.progress}%</span><span><span className={`status-tag ${item.progress >= 50 ? 'complete' : 'progressing'}`}>{item.progress >= 50 ? '수강 완료' : '수강 중'}</span></span></div>; })}</div>;
+  return <div className="data-table"><div className="table-row table-header"><span>이메일</span><span>교육</span><span>신청일</span><span>수강률</span><span>상태</span></div>{items.map((item) => { const student = students.find((person) => person.userId === item.userId); const course = courses.find((lesson) => lesson.id === item.courseId); return <div className="table-row" key={`${item.userId}-${item.courseId}`}><span className="name-cell"><span className="avatar avatar-small">{getStudentEmail(student).slice(0,1)}</span><strong>{getStudentEmail(student) || '알 수 없는 학생'}</strong></span><span>{course?.title || '삭제된 교육'}</span><span className="mono">{item.enrolledAt}</span><span className="progress-cell"><i><b style={{ width: `${item.progress}%` }} /></i>{item.progress}%</span><span><span className={`status-tag ${item.progress >= 50 ? 'complete' : 'progressing'}`}>{item.progress >= 50 ? '수강 완료' : '수강 중'}</span></span></div>; })}</div>;
 }
 
 function Toast({ notice, onClose }) { useEffect(() => { const timer = setTimeout(onClose, 3500); return () => clearTimeout(timer); }, [onClose]); return <div className={`toast toast-${notice.type}`} role="status"><Icon name={notice.type === 'success' ? 'check' : 'book'} size={16} /><span>{notice.text}</span><button onClick={onClose} aria-label="알림 닫기"><Icon name="x" size={15} /></button></div>; }
