@@ -633,6 +633,16 @@ function getStudentEmail(student) {
   return student?.email || (student?.name?.includes('@') ? student.name : '') || student?.name || student?.identifier || '';
 }
 
+function getStudentName(student) {
+  if (student?.displayName) return student.displayName;
+  if (student?.name && !student.name.includes('@')) return student.name;
+  return '이름 미등록';
+}
+
+function getStudentId(student) {
+  return student?.studentId || '';
+}
+
 function AdminPage({ courses, setCourses, students, setStudents, enrollments, onNotice }) {
   const [tab, setTab] = useState('overview');
   const allEnrollments = Object.entries(enrollments).flatMap(([userId, items]) => Object.entries(items).map(([courseId, data]) => ({ userId, courseId, ...data })));
@@ -673,14 +683,15 @@ function StudentsPanel({ students, onToggle }) {
   const [sort, setSort] = useState('name-asc');
   const visibleStudents = useMemo(() => students
     .filter((student) => status === 'all' || (status === 'active' ? student.active : !student.active))
-    .filter((student) => `${getStudentEmail(student)} ${student.role}`.toLowerCase().includes(search.trim().toLowerCase()))
+    .filter((student) => `${getStudentName(student)} ${getStudentEmail(student)} ${getStudentId(student)} ${student.role}`.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => {
-      if (sort === 'name-desc') return getStudentEmail(b).localeCompare(getStudentEmail(a), 'ko');
+      if (sort === 'name-desc') return getStudentName(b).localeCompare(getStudentName(a), 'ko');
+      if (sort === 'student-id') return getStudentId(a).localeCompare(getStudentId(b), 'ko');
       if (sort === 'role') return a.role.localeCompare(b.role);
       if (sort === 'status') return Number(b.active) - Number(a.active);
-      return getStudentEmail(a).localeCompare(getStudentEmail(b), 'ko');
+      return getStudentName(a).localeCompare(getStudentName(b), 'ko');
     }), [students, search, status, sort]);
-  return <div className="table-panel"><div className="panel-heading"><div><p className="eyebrow">ACCESS LIST</p><h2>학생 명단</h2></div><span className="table-count">{visibleStudents.length} / {students.length} students</span></div><div className="admin-data-toolbar"><label className="admin-search"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="이메일 검색" aria-label="학생 이메일 검색" /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="학생 상태 필터"><option value="all">상태 전체</option><option value="active">활성만</option><option value="inactive">비활성만</option></select><select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="학생 데이터 정렬"><option value="name-asc">이메일 오름차순</option><option value="name-desc">이메일 내림차순</option><option value="role">권한순</option><option value="status">활성 상태순</option></select></div><div className="data-table">{visibleStudents.length ? <><div className="table-row table-header"><span>이메일</span><span>권한</span><span>상태</span><span /></div>{visibleStudents.map((student) => <div className="table-row" key={student.userId}><span className="name-cell"><span className="avatar avatar-small">{getStudentEmail(student).slice(0,1)}</span><strong>{getStudentEmail(student)}</strong></span><span>{student.role === 'admin' ? '담당자' : '학생'}</span><span><span className={`active-status ${student.active ? 'on' : 'off'}`}><i />{student.active ? '활성' : '비활성'}</span></span><button className="table-action" onClick={() => onToggle(student.userId)}>{student.active ? '비활성화' : '활성화'}</button></div>)}</> : <div className="admin-empty">조건에 맞는 학생이 없습니다.</div>}</div></div>;
+  return <div className="table-panel"><div className="panel-heading"><div><p className="eyebrow">ACCESS LIST</p><h2>학생 명단</h2></div><span className="table-count">{visibleStudents.length} / {students.length} students</span></div><div className="admin-data-toolbar"><label className="admin-search"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="이름·학번·이메일 검색" aria-label="학생 이름, 학번, 이메일 검색" /></label><select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="학생 상태 필터"><option value="all">상태 전체</option><option value="active">활성만</option><option value="inactive">비활성만</option></select><select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="학생 데이터 정렬"><option value="name-asc">이름 오름차순</option><option value="name-desc">이름 내림차순</option><option value="student-id">학번 오름차순</option><option value="role">권한순</option><option value="status">활성 상태순</option></select></div><div className="data-table student-table">{visibleStudents.length ? <><div className="table-row table-header"><span>학생</span><span>학번</span><span>권한</span><span>상태</span><span>관리</span></div>{visibleStudents.map((student) => <div className="table-row" key={student.userId}><span className="student-identity"><span className="avatar avatar-small">{getStudentName(student).slice(0,1)}</span><span><strong>{getStudentName(student)}</strong><small>{getStudentEmail(student)}</small></span></span><span className="mono student-id-cell">{getStudentId(student) || '미등록'}</span><span>{student.role === 'admin' ? '담당자' : '학생'}</span><span><span className={`active-status ${student.active ? 'on' : 'off'}`}><i />{student.active ? '활성' : '비활성'}</span></span><button className="table-action" onClick={() => onToggle(student.userId)}>{student.active ? '비활성화' : '활성화'}</button></div>)}</> : <div className="admin-empty">조건에 맞는 학생이 없습니다.</div>}</div></div>;
 }
 
 function CoursesPanel({ courses, onToggle, onSave, onCreate }) {
