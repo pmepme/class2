@@ -133,7 +133,7 @@ function App() {
   const handleOtpVerification = async ({ email, token }) => {
     const result = await verifyEmailOtp({ email, token });
     if (!result.approved) return result;
-    if (result.user?.onboardingCompleted || result.user?.role === 'admin') {
+    if (result.user?.onboardingCompleted) {
       applyAuthenticatedUser(result.user, 'supabase-email-otp');
     }
     return result;
@@ -320,7 +320,7 @@ function AuthPage({ onRequestOtp, onVerifyEmail, onLogin, onCompleteProfile, onB
     try {
       const result = await onVerifyEmail({ email, token: normalizedToken });
       if (!result?.approved) setError(result?.message || '인증번호가 올바르지 않거나 만료되었습니다.');
-      else if (!result.user?.onboardingCompleted && result.user?.role !== 'admin') {
+      else if (!result.user?.onboardingCompleted) {
         setStep('profile');
         setMessage('이메일 인증이 완료되었습니다. 회원 정보를 설정해 주세요.');
       }

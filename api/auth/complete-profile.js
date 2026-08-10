@@ -2,7 +2,6 @@ import {
   createSupabaseServerClient,
   getSafeUser,
   getSupabaseConfig,
-  isAdminEmail,
   isHanyangEmail,
   normalizeEmail,
   rejectMethod,
@@ -45,15 +44,13 @@ export default async function handler(req, res) {
       sendJson(res, 403, { error: 'hanyang_email_required', message: '한양대학교 이메일 계정만 사용할 수 있습니다.' });
       return;
     }
-    if (!isAdminEmail(email)) {
-      const { error: passwordError } = await supabase.auth.updateUser({
-        password,
-        data: { display_name: displayName, student_id: studentId },
-      });
-      if (passwordError) {
-        sendJson(res, 400, { error: 'password_setup_failed', message: '비밀번호를 설정하지 못했습니다. 입력값을 확인해 주세요.' });
-        return;
-      }
+    const { error: passwordError } = await supabase.auth.updateUser({
+      password,
+      data: { display_name: displayName, student_id: studentId },
+    });
+    if (passwordError) {
+      sendJson(res, 400, { error: 'password_setup_failed', message: '비밀번호를 설정하지 못했습니다. 입력값을 확인해 주세요.' });
+      return;
     }
 
     const { error: profileError } = await supabase
