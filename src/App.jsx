@@ -143,13 +143,16 @@ function App() {
     setNotice({ type: 'success', text: '수강 신청이 저장되었습니다.' });
     setView('learn');
   };
-  const updateProgress = (courseId, progress, lastPosition = 0) => {
+  const updateProgress = (courseId, progress, lastPosition = 0, watchedSeconds = 0, watchedRanges = []) => {
     if (!session) return;
     const next = ensureEnrollment(enrollments, session.userId, courseId);
+    const currentEnrollment = next[session.userId][courseId];
     next[session.userId][courseId] = {
-      ...next[session.userId][courseId],
+      ...currentEnrollment,
       progress: Math.round(Number(progress)),
-      lastPosition,
+      lastPosition: Math.max(0, Math.round(Number(lastPosition) || 0)),
+      watchedSeconds: Math.max(0, Number(watchedSeconds) || 0),
+      watchedRanges: Array.isArray(watchedRanges) ? watchedRanges : (currentEnrollment.watchedRanges || []),
       updatedAt: new Date().toISOString(),
     };
     setEnrollments(next);
@@ -311,6 +314,35 @@ function formatAdminDate(date = new Date()) {
   return `${year}. ${month}. ${day}`;
 }
 
+function normalizeWatchedRanges(value, duration = Number.POSITIVE_INFINITY) {
+  if (!Array.isArray(value)) return [];
+  return value.map((range) => {
+    const start = Array.isArray(range) ? range[0] : range?.start;
+    const end = Array.isArray(range) ? range[1] : range?.end;
+    return [Number(start), Number(end)];
+  }).filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .map(([start, end]) => [Math.max(0, Math.min(start, duration)), Math.max(0, Math.min(end, duration))])
+    .filter(([start, end]) => end > start)
+    .sort((left, right) => left[0] - right[0]);
+}
+
+function mergeWatchedRange(ranges, start, end, duration) {
+  const nextRanges = normalizeWatchedRanges([...ranges, [start, end]], duration);
+  return nextRanges.reduce((merged, range) => {
+    const previous = merged[merged.length - 1];
+    if (previous && range[0] <= previous[1] + 0.25) {
+      previous[1] = Math.max(previous[1], range[1]);
+      return merged;
+    }
+    merged.push([...range]);
+    return merged;
+  }, []);
+}
+
+function getWatchedSeconds(ranges) {
+  return ranges.reduce((total, [start, end]) => total + Math.max(0, end - start), 0);
+}
+
 let youtubeApiPromise;
 
 function loadYouTubeApi() {
@@ -353,13 +385,29 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
   const playerHostRef = useRef(null);
   const playerRef = useRef(null);
   const onProgressRef = useRef(onProgress);
+  const fallbackDuration = Math.max(0, (Number(course.minutes) || 0) * 60);
+  const hasPersistedRanges = Array.isArray(enrollment?.watchedRanges);
+  const persistedRanges = hasPersistedRanges
+    ? normalizeWatchedRanges(enrollment.watchedRanges)
+    : [];
+  const legacyWatchedSeconds = Number.isFinite(Number(enrollment?.watchedSeconds)) ? Math.max(0, Number(enrollment.watchedSeconds)) : 0;
+  const legacyProgress = Math.min(100, Math.max(0, Number(enrollment?.progress) || 0));
+  const initialRanges = hasPersistedRanges ? persistedRanges : [];
+  const watchedRangesRef = useRef(initialRanges);
+  const watchedSecondsRef = useRef(getWatchedSeconds(initialRanges));
+  const observationRef = useRef({ time: null, at: null });
+  const playbackActiveRef = useRef(false);
   const [progress, setProgress] = useState(Number(enrollment?.progress) || 0);
   const [speed, setSpeed] = useState('1.0');
   const [caption, setCaption] = useState('ko');
   const [savedAt, setSavedAt] = useState('');
   const [showControls, setShowControls] = useState(false);
   const [playerMode, setPlayerMode] = useState('loading');
-  const [durationSeconds, setDurationSeconds] = useState((Number(course.minutes) || 0) * 60);
+  const [durationSeconds, setDurationSeconds] = useState(fallbackDuration);
+  const [currentPosition, setCurrentPosition] = useState(() => {
+    const lastPosition = Number(enrollment?.lastPosition) || 0;
+    return fallbackDuration ? Math.min(100, Math.max(0, Math.round((lastPosition / fallbackDuration) * 100))) : 0;
+  });
   const embedUrl = `https://www.youtube.com/embed/${course.videoId}?enablejsapi=1&cc_load_policy=1&cc_lang_pref=${caption}&playsinline=1&rel=0`;
   const materials = getCourseMaterials(course);
   useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
@@ -374,10 +422,42 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
       const duration = Number(player.getDuration());
       const currentTime = Number(player.getCurrentTime());
       if (!duration || !Number.isFinite(currentTime)) return;
-      const nextProgress = Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)));
+      const now = performance.now();
+      const currentPositionPercent = Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)));
       setDurationSeconds(duration);
-      setProgress(nextProgress);
-      onProgressRef.current(course.id, nextProgress, Math.round(currentTime));
+      setCurrentPosition(currentPositionPercent);
+
+      if (!hasPersistedRanges && watchedRangesRef.current.length === 0 && (legacyWatchedSeconds > 0 || legacyProgress > 0)) {
+        const legacyEnd = Math.min(duration, legacyWatchedSeconds || (duration * legacyProgress) / 100);
+        watchedRangesRef.current = legacyEnd > 0 ? [[0, legacyEnd]] : [];
+        watchedSecondsRef.current = legacyEnd;
+      }
+
+      const previousObservation = observationRef.current;
+      if (!playbackActiveRef.current || previousObservation.time === null) {
+        observationRef.current = { time: currentTime, at: now };
+        return;
+      }
+
+      const elapsedSeconds = Math.max(0, (now - previousObservation.at) / 1000);
+      const delta = currentTime - previousObservation.time;
+      const playbackRate = Number(player.getPlaybackRate?.()) || 1;
+      const expectedDelta = elapsedSeconds * playbackRate;
+      const tolerance = Math.max(0.75, expectedDelta * 0.5);
+      const isContinuousPlayback = delta > 0 && delta <= expectedDelta + tolerance;
+
+      if (isContinuousPlayback) {
+        const nextRanges = mergeWatchedRange(watchedRangesRef.current, previousObservation.time, currentTime, duration);
+        const nextWatchedSeconds = Math.min(duration, getWatchedSeconds(nextRanges));
+        watchedRangesRef.current = nextRanges;
+        watchedSecondsRef.current = nextWatchedSeconds;
+        const watchedProgress = Math.min(100, Math.max(0, Math.round((nextWatchedSeconds / duration) * 100)));
+        setProgress(watchedProgress);
+        onProgressRef.current(course.id, watchedProgress, Math.round(currentTime), Math.round(nextWatchedSeconds), nextRanges);
+      }
+
+      // A seek creates a large currentTime jump. Reset the baseline without counting it.
+      observationRef.current = { time: currentTime, at: now };
     };
     const stopSync = () => {
       if (syncTimer) window.clearInterval(syncTimer);
@@ -385,7 +465,7 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
     };
     const startSync = () => {
       stopSync();
-      syncTimer = window.setInterval(syncProgress, 2000);
+      syncTimer = window.setInterval(syncProgress, 1000);
     };
     loadYouTubeApi().then((YT) => {
       if (cancelled || !playerHostRef.current) return;
@@ -396,14 +476,26 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
           onReady: (event) => {
             if (cancelled) return;
             const duration = Number(event.target.getDuration());
-            if (duration) setDurationSeconds(duration);
+            if (duration) {
+              setDurationSeconds(duration);
+              if (!hasPersistedRanges && watchedRangesRef.current.length === 0 && (legacyWatchedSeconds > 0 || legacyProgress > 0)) {
+                const legacyEnd = Math.min(duration, legacyWatchedSeconds || (duration * legacyProgress) / 100);
+                watchedRangesRef.current = legacyEnd > 0 ? [[0, legacyEnd]] : [];
+                watchedSecondsRef.current = legacyEnd;
+              }
+            }
             if (enrollment?.lastPosition) event.target.seekTo(Number(enrollment.lastPosition), true);
             setPlayerMode('ready');
           },
           onStateChange: (event) => {
-            if (event.data === YT.PlayerState.PLAYING) startSync();
-            else {
+            if (event.data === YT.PlayerState.PLAYING) {
+              playbackActiveRef.current = true;
+              observationRef.current = { time: Number(event.target.getCurrentTime()), at: performance.now() };
+              startSync();
+            } else if ([YT.PlayerState.PAUSED, YT.PlayerState.ENDED, YT.PlayerState.BUFFERING].includes(event.data)) {
               syncProgress();
+              playbackActiveRef.current = false;
+              observationRef.current = { time: null, at: null };
               stopSync();
             }
           },
@@ -432,15 +524,16 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
   };
   const save = () => {
     const playerTime = Number(playerRef.current?.getCurrentTime?.());
-    const fallbackTime = durationSeconds ? (durationSeconds * progress) / 100 : 0;
-    onProgress(course.id, Number(progress), Math.round(Number.isFinite(playerTime) ? playerTime : fallbackTime));
+    const fallbackTime = Number(enrollment?.lastPosition) || 0;
+    onProgress(course.id, Number(progress), Math.round(Number.isFinite(playerTime) ? playerTime : fallbackTime), Math.round(watchedSecondsRef.current), watchedRangesRef.current);
     setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     setShowControls(false);
   };
   const seekToProgress = (value) => {
     const nextProgress = Number(value);
-    setProgress(nextProgress);
+    setCurrentPosition(nextProgress);
     setShowControls(true);
+    observationRef.current = { time: null, at: null };
     if (playerRef.current?.seekTo && durationSeconds) playerRef.current.seekTo((durationSeconds * nextProgress) / 100, true);
   };
   useEffect(() => { setProgress(Number(enrollment?.progress) || 0); }, [enrollment?.progress]);
@@ -449,7 +542,7 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
       playerRef.current.setOption('captions', 'track', { language: caption });
     }
   }, [caption, playerMode]);
-  return <section className="learn-page"><div className="learn-topbar page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록</button><span className="learn-label">NOW LEARNING</span><span className="learn-course-number">{course.category} / {course.level}</span></div><div className="learn-layout page-width"><div className="video-column"><div className="video-frame">{playerMode === 'fallback' ? <iframe title={course.title} src={embedUrl} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /> : <div ref={playerHostRef} className="youtube-player-host" />}{playerMode === 'loading' && <div className="video-loading">YouTube 플레이어 연결 중...</div>}</div><div className="video-underbar"><div><span className="player-overline">YOUR PROGRESS</span><strong>{progress}% <small>{progress >= 50 ? '수강 완료' : '수강 중'}</small></strong></div><button className="button button-small button-dark" onClick={save}><Icon name="check" size={15} /> 진행률 저장</button></div><div className="range-wrap"><input type="range" min="0" max="100" value={progress} onChange={(event) => seekToProgress(event.target.value)} aria-label="수강률" /><div className="range-labels"><span>시작</span><span>{course.duration} · 50% 이상 수료</span><span>완료</span></div></div>{showControls && <p className="save-hint">영상 재생 위치를 변경했습니다. 현재 위치와 수강률을 저장하려면 <button onClick={save}>지금 저장</button>하세요.</p>}{savedAt && <p className="saved-time"><Icon name="check" size={14} /> {savedAt}에 진행률을 저장했습니다.</p>}<div className="player-tools"><div><span className="tool-label">배속</span>{['1.0', '1.25', '1.5', '2.0'].map((item) => <button key={item} className={speed === item ? 'selected' : ''} onClick={() => { setSpeed(item); sendPlayerCommand('setPlaybackRate', [Number(item)]); }}>{item}x</button>)}</div><div><span className="tool-label">자막</span><button className={caption === 'ko' ? 'selected' : ''} onClick={() => setCaption('ko')}>한국어</button><button className={caption === 'en' ? 'selected' : ''} onClick={() => setCaption('en')}>English</button></div></div></div><aside className="lesson-sidebar"><p className="eyebrow">LESSON 01</p><h1>{course.title}</h1><p className="lesson-subtitle">{course.subtitle}</p><div className="sidebar-divider" /><div className="lesson-facts"><div><span>교육 시간</span><strong>{course.duration}</strong></div><div><span>난이도</span><strong>{course.level}</strong></div><div><span>업데이트</span><strong>{course.updatedAt}</strong></div></div><div className="material-list">{materials.length ? materials.map((material) => <div className="material-card" key={material.id}><div className="material-icon"><Icon name="download" size={20} /></div><div><strong>강의자료</strong><span>{material.name}</span></div>{material.url && material.url !== '#' ? <a href={material.url} target="_blank" rel="noreferrer" aria-label={`${material.name} 다운로드`}><Icon name="external" size={16} /></a> : <button onClick={() => onDownload(course, material)} aria-label="강의자료 다운로드"><Icon name="download" size={17} /></button>}</div>) : <div className="material-card material-empty"><div className="material-icon"><Icon name="book" size={18} /></div><div><strong>강의자료</strong><span>등록된 자료가 없습니다.</span></div></div>}</div><div className="lesson-tip"><span>TIP</span><p>자막은 영상 플레이어의 CC 버튼에서도 언어를 바꿀 수 있어요.</p></div></aside></div></section>;
+  return <section className="learn-page"><div className="learn-topbar page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록</button><span className="learn-label">NOW LEARNING</span><span className="learn-course-number">{course.category} / {course.level}</span></div><div className="learn-layout page-width"><div className="video-column"><div className="video-frame">{playerMode === 'fallback' ? <iframe title={course.title} src={embedUrl} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /> : <div ref={playerHostRef} className="youtube-player-host" />}{playerMode === 'loading' && <div className="video-loading">YouTube 플레이어 연결 중...</div>}</div><div className="video-underbar"><div><span className="player-overline">YOUR PROGRESS</span><strong>{progress}% <small>{progress >= 50 ? '수강 완료' : '수강 중'}</small></strong></div><button className="button button-small button-dark" onClick={save}><Icon name="check" size={15} /> 진행률 저장</button></div><div className="range-wrap"><input type="range" min="0" max="100" value={currentPosition} onChange={(event) => seekToProgress(event.target.value)} aria-label="영상 위치 이동" /><div className="range-labels"><span>시작</span><span>{course.duration} · 현재 위치 이동</span><span>끝</span></div></div>{showControls && <p className="save-hint">영상 위치를 변경했습니다. 이동한 위치에서 실제로 재생된 구간만 수강률에 반영됩니다.</p>}{savedAt && <p className="saved-time"><Icon name="check" size={14} /> {savedAt}에 진행률을 저장했습니다.</p>}<div className="player-tools"><div><span className="tool-label">배속</span>{['1.0', '1.25', '1.5', '2.0'].map((item) => <button key={item} className={speed === item ? 'selected' : ''} onClick={() => { setSpeed(item); sendPlayerCommand('setPlaybackRate', [Number(item)]); }}>{item}x</button>)}</div><div><span className="tool-label">자막</span><button className={caption === 'ko' ? 'selected' : ''} onClick={() => setCaption('ko')}>한국어</button><button className={caption === 'en' ? 'selected' : ''} onClick={() => setCaption('en')}>English</button></div></div></div><aside className="lesson-sidebar"><p className="eyebrow">LESSON 01</p><h1>{course.title}</h1><p className="lesson-subtitle">{course.subtitle}</p><div className="sidebar-divider" /><div className="lesson-facts"><div><span>교육 시간</span><strong>{course.duration}</strong></div><div><span>난이도</span><strong>{course.level}</strong></div><div><span>업데이트</span><strong>{course.updatedAt}</strong></div></div><div className="material-list">{materials.length ? materials.map((material) => <div className="material-card" key={material.id}><div className="material-icon"><Icon name="download" size={20} /></div><div><strong>강의자료</strong><span>{material.name}</span></div>{material.url && material.url !== '#' ? <a href={material.url} target="_blank" rel="noreferrer" aria-label={`${material.name} 다운로드`}><Icon name="external" size={16} /></a> : <button onClick={() => onDownload(course, material)} aria-label="강의자료 다운로드"><Icon name="download" size={17} /></button>}</div>) : <div className="material-card material-empty"><div className="material-icon"><Icon name="book" size={18} /></div><div><strong>강의자료</strong><span>등록된 자료가 없습니다.</span></div></div>}</div><div className="lesson-tip"><span>TIP</span><p>자막은 영상 플레이어의 CC 버튼에서도 언어를 바꿀 수 있어요.</p></div></aside></div></section>;
 }
 
 function MyPage({ session, courses, enrollments, onSelect, onHome }) {

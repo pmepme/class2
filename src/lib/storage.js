@@ -58,6 +58,12 @@ export function saveEnrollments(enrollments) {
 export function ensureEnrollment(enrollments, userId, courseId) {
   const next = structuredClone(enrollments);
   next[userId] ||= {};
-  next[userId][courseId] ||= { enrolledAt: new Date().toISOString().slice(0, 10), progress: 0, lastPosition: 0 };
+  next[userId][courseId] ||= {
+    enrolledAt: new Date().toISOString().slice(0, 10),
+    progress: 0,
+    lastPosition: 0,
+    watchedSeconds: 0,
+    watchedRanges: [],
+  };
   return next;
 }
