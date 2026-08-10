@@ -98,7 +98,6 @@ export const initialEnrollments = {
 export const categories = ['전체', '도서관 이용', '연구·학습', '전자자료'];
 
 export const storageKeys = {
-  session: 'library-learn-session',
   courses: 'library-learn-courses',
   students: 'library-learn-students',
   enrollments: 'library-learn-enrollments',

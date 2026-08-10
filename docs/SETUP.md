@@ -7,24 +7,81 @@ npm install
 npm run dev
 ```
 
-Vite가 출력하는 로컬 URL을 브라우저에서 연다.
+`npm run dev`는 Vite 화면을 실행한다. 실제 이메일 OTP까지 로컬에서 테스트하려면 Vercel CLI로 Serverless API를 함께 실행한다.
 
-## 인증
+```bash
+npx vercel dev
+```
 
-- 일반 참여자와 관리자는 Apps Script에 연결된 `Students` 시트에서 이름·학번/사번을 대조한다.
-- 일반 참여자는 `action=verify_student`, 관리자는 `action=verify_admin`으로 구분한다.
-- 관리자 화면은 상단 `관리자` 메뉴에서 이름·학번/사번을 입력해야 한다.
-- 참여자·관리자 인증은 Apps Script `doPost(e)`에 JSON으로 `action`, `name`, `studentOrEmployeeNo`, `apiKey`를 전송하고, 응답에 `approved: true` 또는 `authorized: true`가 명시된 경우에만 세션을 만든다. 단순 상태 응답의 `success: true`는 승인으로 처리하지 않는다.
-- 로컬 실행 시 `.env.local`에 `VITE_APPS_SCRIPT_API_SECRET=library_edcation_test_page_1`을 설정한다. Apps Script Script Properties의 키는 코드 기준 `API_SECRET`이며, 값은 동일해야 한다. `.env.local`은 저장소에 커밋하지 않는다.
+## Supabase 환경변수
 
-## 데이터
+`.env.local` 또는 Vercel Environment Variables에 실제 값을 입력한다. `.env.local`은 Git에 커밋하지 않는다.
 
-교육·수강 데이터와 관리자 화면의 데모용 표시 데이터는 `src/lib/mockData.js` 및 브라우저 localStorage에 저장된다. 인증 명단의 기준은 Apps Script의 `Students` 시트이며, 관리자 화면의 `데모 초기화` 버튼은 인증 명단을 변경하지 않는다.
+```text
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
+```
 
-## Apps Script 연동 전 확인
+- Supabase Project Settings의 URL과 Publishable Key를 사용한다.
+- service role key는 사용하지 않으며, 클라이언트 코드나 저장소에 기록하지 않는다.
+- Vercel에서는 Preview와 Production 환경에 각각 입력한다.
 
-1. Apps Script 웹 앱 배포 대상이 현재 사이트 사용자의 한양대 Google 로그인 환경과 맞는지 확인한다. 현재 endpoint는 새 웹 앱 배포 URL을 사용한다.
-2. `doPost(e)`가 위 JSON 필드와 `action=verify_student|verify_admin`을 받고, 명단과 이름·학번/사번을 대조해 JSON으로 `{ "approved": true, "userId": "...", "displayName": "..." }` 또는 `{ "authorized": true, ... }`를 반환하도록 한다. 현재 `doGet(e)`는 상태 확인용이므로 인증에 사용하지 않는다. `{ "success": true, "service": "student-verification-api", "status": "ok" }`는 상태 확인 응답이므로 승인으로 사용할 수 없다.
-3. 정식 운영에서는 Apps Script API secret을 브라우저에 넣지 말고 백엔드의 `/api/auth/verify`가 Apps Script를 호출하도록 교체한다. Vite 환경 변수도 빌드 결과에서는 노출될 수 있다.
-4. 백엔드와 관리형 DB, 학교 SSO OIDC/SAML, 서버 세션·RBAC·감사 로그·개인정보 보존 정책을 확정한다.
-5. YouTube ID·자료 파일 저장소·다운로드 정책을 확정한다.
+## Supabase 초기 설정
+
+1. `supabase/migrations/202608090001_hanyang_email_auth.sql`을 Supabase SQL Editor 또는 migration workflow로 실행한다.
+2. Authentication → Hooks → Before User Created에 `public.restrict_hanyang_email`을 등록한다.
+3. Authentication → Email Templates의 Magic Link/OTP 템플릿에 8자리 토큰을 표시한다.
+
+```html
+<h2>한양대학교 이메일 인증</h2>
+<p>아래 인증번호를 서비스에 입력해 주세요.</p>
+<h1>{{ .Token }}</h1>
+<p>본인이 요청하지 않았다면 이 이메일을 무시해 주세요.</p>
+```
+
+4. 실제 `@hanyang.ac.kr` 이메일로 OTP 발송과 인증을 테스트한다.
+
+## 인증 흐름
+
+- 학생·관리자 모두 한양대학교 이메일과 8자리 OTP를 사용한다.
+- 이메일은 `trim().toLowerCase()`로 정규화하고 도메인은 정확히 `hanyang.ac.kr`만 허용한다.
+- 학생 로그인과 신규 회원가입은 Supabase `signInWithOtp` → `verifyOtp` 한 흐름으로 처리한다.
+- 인증 세션은 Vercel API가 Supabase SSR 쿠키로 설정하며, access token을 `localStorage`나 `sessionStorage`에 저장하지 않는다.
+- 관리자 권한은 인증된 이메일이 정확히 `belief@hanyang.ac.kr`일 때만 부여한다. 클라이언트 UI가 아니라 API와 SQL profile trigger에서 함께 제한한다.
+- 실제 재학 여부·캠퍼스·학번·학과를 증명하지 않고, 한양대학교 이메일 소유 여부만 확인한다.
+
+## 보안 확인
+
+다음 주소는 모두 거부되어야 한다.
+
+- `user@gmail.com`
+- `user@naver.com`
+- `user@fakehanyang.ac.kr`
+- `user@hanyang.ac.kr.attacker.com`
+
+다음 주소는 허용되어야 한다.
+
+- `student@hanyang.ac.kr`
+- `STUDENT@HANYANG.AC.KR` → 소문자로 정규화
+
+## 강의자료 Google Drive 업로드(선택 기능)
+
+인증은 Supabase가 담당하고, 교육 자료 업로드는 기존 Apps Script/Google Drive adapter를 계속 사용할 수 있다.
+
+```text
+VITE_APPS_SCRIPT_DATA_URL=https://script.google.com/macros/s/배포ID/exec
+VITE_APPS_SCRIPT_API_SECRET=인증용값
+```
+
+관리자는 교육 편집 화면에서 파일을 선택하면 `upload_material` 요청으로 Drive에 업로드하고 반환된 `fileId`를 교육 자료에 저장한다. 이 API secret은 Vite 빌드에 포함될 수 있으므로 기관 운영에서는 백엔드 adapter 뒤로 이동해야 한다.
+
+## 배포 전 체크리스트
+
+- [ ] Supabase URL/Publishable Key를 Vercel에 입력
+- [ ] SQL migration 실행
+- [ ] Before User Created Hook 등록
+- [ ] OTP 템플릿에 `{{ .Token }}` 적용
+- [ ] `belief@hanyang.ac.kr` 계정으로 관리자 OTP 테스트
+- [ ] 다른 `@hanyang.ac.kr` 계정이 관리자 화면에 접근하지 못하는지 확인
+- [ ] 외부 도메인과 잘못된 유사 도메인이 차단되는지 확인
+- [ ] Vercel 배포 후 새로고침에도 HttpOnly 쿠키 세션이 유지되는지 확인

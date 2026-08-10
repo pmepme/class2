@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-09
+
+- 이름·학번/사번 Apps Script 인증을 한양대학교 이메일 OTP 인증으로 교체.
+- Supabase Auth + Vercel Serverless API + HttpOnly 쿠키 세션 경계 추가.
+- `@hanyang.ac.kr` 정확한 도메인 제한과 `belief@hanyang.ac.kr` 단일 관리자 권한 추가.
+- Supabase profiles/RLS/Before User Created Hook migration과 운영 설정 문서 추가.
+
 ## 2026-08-03
 
 - 빈 `class2` 프로젝트에 React/Vite 기반 Library Learn MVP 추가.

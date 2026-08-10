@@ -121,10 +121,22 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(109,84,239,.
 .material-add-row { display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 7px; margin-top: 9px; }
 .material-add-row input { margin-top: 0; }
 .material-editor-empty { padding: 18px; }
+.material-upload-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px; border: 1px dashed #cfcde8; border-radius: 8px; background: #faf9ff; }
+.file-upload-control { display: inline-flex; align-items: center; gap: 6px; padding: 9px 12px; border-radius: 7px; background: var(--violet); color: #fff; cursor: pointer; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.file-upload-control input { display: none; }
+.material-upload-row > span { color: #898a9a; font-size: 10px; line-height: 1.5; }
+.pending-file-list { display: grid; gap: 6px; margin-top: 8px; }
+.pending-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border-radius: 6px; background: #f4f2ff; color: var(--violet); font-size: 10px; }
+.pending-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 24px; padding-top: 17px; border-top: 1px solid #ededf2; }
 .publish-toggle { display: inline-flex; align-items: center; gap: 7px; color: #77788a; font-size: 10px; }
 .publish-toggle input { accent-color: var(--violet); }
 .material-card a { width: 31px; height: 31px; display: grid; place-items: center; color: var(--violet); background: #fff; border-radius: 7px; }
+.otp-input { text-align: center; letter-spacing: .45em; font: 700 20px 'DM Mono', monospace !important; padding-left: 20px !important; }
+.otp-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 13px; }
+.otp-actions .inline-button:disabled { color: #b2b3c0; cursor: wait; }
+.form-success { display: flex; gap: 7px; align-items: center; color: #29936e; font-size: 11px; line-height: 1.4; margin-top: 15px; }
+.auth-secondary-action { width: 100%; justify-content: center; margin-top: 15px; color: #85869a; font-size: 11px; }
 .material-list { display: grid; gap: 10px; }
 .material-empty { margin-top: 29px; }
 .video-frame { position: relative; }
@@ -140,6 +152,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(109,84,239,.
   .editor-grid { grid-template-columns: 1fr; }
   .editor-wide { grid-column: auto; }
   .material-add-row { grid-template-columns: 1fr; }
+  .material-upload-row { align-items: stretch; flex-direction: column; }
   .editor-footer { align-items: stretch; flex-direction: column; }
   .editor-footer .modal-actions { justify-content: flex-end; }
   .enrollment-course-group .data-table { min-width: 650px; }

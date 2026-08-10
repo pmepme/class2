@@ -21,25 +21,12 @@ function normalizeCourse(course) {
     .filter((material) => material && material.name)
     .map((material, index) => ({
       id: material.id || `${course.id}-material-${index + 1}`,
+      fileId: material.fileId || '',
+      storage: material.storage || (material.fileId ? 'drive' : 'link'),
       name: material.name,
       url: material.url || '#',
     }));
   return { ...course, materials, materialName: materials[0]?.name || '' };
-}
-
-export function getSession() {
-  const session = read(storageKeys.session, null);
-  // 이전 데모에서 만들어진 localStorage 세션은 Apps Script 재인증을 거치도록 폐기합니다.
-  if (session && session.authProvider !== 'apps-script') {
-    window.localStorage.removeItem(storageKeys.session);
-    return null;
-  }
-  return session;
-}
-
-export function setSession(user) {
-  if (user) write(storageKeys.session, user);
-  else window.localStorage.removeItem(storageKeys.session);
 }
 
 export function getCourses() {
@@ -70,7 +57,6 @@ export function resetDemoData() {
   saveCourses(initialCourses);
   saveStudents(initialStudents);
   saveEnrollments(initialEnrollments);
-  setSession(null);
 }
 
 export function ensureEnrollment(enrollments, userId, courseId) {

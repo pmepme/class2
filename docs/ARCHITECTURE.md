@@ -1,54 +1,66 @@
 # Architecture
 
-## 현재 MVP
+## 현재 구현
 
 ```text
-React + Vite SPA
-  ├─ App state / view routing
-  ├─ UI components
-  └─ storage adapter
-       └─ browser localStorage (가상 데이터 전용)
+Browser
+  ├─ Vite + React UI
+  ├─ memory-only auth state
+  └─ /api/auth/* (credentials: include)
+        └─ Vercel Serverless Functions
+              └─ Supabase Auth + PostgreSQL profiles
+
+교육·수강 MVP 데이터
+  └─ browser localStorage (인증 토큰은 저장하지 않음)
 ```
 
-현재 프로젝트는 백엔드 없이 핵심 UX를 검증하는 프론트엔드 MVP로 구성했다. 일반 학습자와 관리자 인증은 Apps Script adapter를 통해 `Students` 시트를 실시간 대조하고, 교육·수강 데이터는 데모용 localStorage를 사용한다. `src/lib/storage.js`가 저장소 경계를 제공하므로 API·DB로 교체할 때 화면 컴포넌트가 직접 localStorage를 다루지 않는다.
+현재 프로젝트는 Vite + React SPA를 유지한다. 기존 교육 탐색·수강·관리자 UI는 유지하고, 이름·학번/사번 Apps Script 인증을 Supabase 이메일 OTP 인증으로 교체했다. 브라우저는 Supabase access token을 직접 보관하지 않으며, `/api/auth/*`가 Supabase SSR client로 HttpOnly 쿠키 세션을 관리한다.
 
-## 상용화 목표 구조
+## 인증 흐름
 
 ```text
-Student browser
-  ↓ HTTPS
-Web frontend
-  ↓ session cookie / API
-Backend API ── AuthProvider interface ── School SSO (OIDC/SAML)
-     │                         └────── Apps Script adapter (초기 명단 대조)
-     ├─ managed relational DB: users, courses, enrollments, progress_events
-     ├─ object storage: lecture materials
-     └─ audit / operational logs (PII 최소화)
+@hanyang.ac.kr 입력
+  → POST /api/auth/request-otp
+  → Supabase signInWithOtp
+  → 이메일의 8자리 {{ .Token }} 입력
+  → POST /api/auth/verify-otp
+  → Supabase verifyOtp
+  → profiles 조회 + 역할 계산
+  → HttpOnly 쿠키 세션
 ```
 
-## 도메인 모델 초안
+- 프론트엔드는 입력 편의를 위해 도메인을 검사한다.
+- API는 동일한 도메인을 다시 검사한다.
+- Supabase Before User Created Hook은 직접 Auth API를 호출하는 우회도 차단한다.
+- `belief@hanyang.ac.kr`만 관리자 역할로 계산한다.
+- 관리자 메뉴와 API 모두 서버 세션의 역할을 확인한다.
 
-- `users`: 내부 `user_id`, 외부 식별자 해시 또는 기관 식별자, 표시 이름, active, role.
-- `courses`: title, description, category, youtube_video_id, material_url, published_at.
-- `enrollments`: user_id, course_id, enrolled_at, status.
-- `progress_events`: enrollment_id, watched_ranges 또는 검증된 position, created_at.
-- `progress_summary`: 누적 시청 구간·진행률·완료 여부를 서버에서 계산.
+## 파일 경계
 
-## 교체 가능한 인증 어댑터
+- `src/lib/emailAuth.js`: 이메일 정규화, UI용 API client, 관리자 이메일 상수.
+- `api/_supabase.js`: Supabase SSR client와 쿠키 serializer, safe user 변환.
+- `api/auth/request-otp.js`: OTP 발송과 도메인/관리자 이메일 제한.
+- `api/auth/verify-otp.js`: OTP 검증, profile 조회, 관리자 접근 제한.
+- `api/auth/session.js`: 새로고침 후 쿠키 세션 복구.
+- `api/auth/logout.js`: Supabase 세션 종료와 쿠키 정리.
+- `supabase/migrations/202608090001_hanyang_email_auth.sql`: profiles, trigger, RLS, Before User Created Hook.
+- `src/lib/storage.js`: 교육·수강 데모 데이터 adapter. 인증 세션을 저장하지 않는다.
 
-```ts
-interface AuthProvider {
-  verify(input: { name: string; identifier: string }): Promise<{
-    approved: boolean;
-    userId?: string;
-    displayName?: string;
-    role?: 'student' | 'admin';
-  }>;
-}
-```
+## 데이터 모델
 
-현재 프로토타입은 일반 참여자·관리자 인증을 위해 브라우저가 Apps Script endpoint를 직접 호출한다. 정식 운영에서는 브라우저가 Google Sheets/Apps Script를 직접 호출하지 않도록 백엔드의 `POST /api/auth/verify` 뒤에 adapter를 두고, 브라우저에 노출되는 API secret을 제거한다. SSO를 사용할 수 있게 되면 동일 인터페이스의 OIDC/SAML provider로 교체한다.
+- `profiles`: `auth.users.id`와 연결된 email, display_name, onboarding_completed, role, active.
+- `courses`: 현재는 localStorage demo data. 운영 시 DB table로 이전한다.
+- `enrollments`: 현재는 localStorage demo data. 운영 시 user_id/course_id 기반 DB로 이전한다.
+- `progress_events`: 운영 단계에서 실제 재생 구간을 기록하고 서버에서 progress를 계산한다.
 
-## 영상 진행률
+## 보안 경계
 
-현재 데모는 진행률 슬라이더와 저장 버튼으로 상태를 재현한다. 실제 배포에서는 YouTube IFrame Player API의 `getCurrentTime`, `getDuration`, 상태 이벤트를 백엔드로 주기적으로 전송하고, 마지막 위치가 아닌 재생 구간 누적을 기본안으로 검토한다. 영상이 YouTube 미등록이라도 완전한 콘텐츠 접근 통제는 아니므로 보안 요구가 높으면 전용 VOD를 검토한다.
+- Publishable Key만 환경변수로 사용한다. service role key는 클라이언트·Vercel API 코드에 넣지 않는다.
+- API는 Supabase 내부 오류·SQL·환경변수·스택 트레이스를 사용자에게 반환하지 않는다.
+- profile의 id, email, role, active는 사용자 update trigger로 변경할 수 없게 한다.
+- `profiles` RLS는 본인 행만 조회·수정하도록 제한한다.
+- 현재 교육·수강 데이터는 UX 검증용 localStorage이며, 운영 데이터로 사용하기 전 서버 API·DB·RLS를 추가해야 한다.
+
+## 유지되는 Apps Script 경계
+
+강의자료 Google Drive 업로드는 `src/lib/appScriptData.js`의 선택적 기능으로 유지한다. 인증에는 더 이상 사용하지 않는다. 운영 전에는 자료 업로드도 백엔드 adapter 뒤로 이동하고 브라우저에 API secret을 노출하지 않아야 한다.

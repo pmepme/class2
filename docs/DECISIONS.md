@@ -9,9 +9,16 @@
 
 ## 2026-08-03 · 인증은 provider interface 뒤에 격리
 
-- 선택: 이름·학번/사번 대조는 데모용 mock provider로만 구현하고, 제품 구조는 SSO/Apps Script adapter 교체를 전제로 한다.
-- 이유: 학교 SSO 가능 여부와 Apps Script 운영 정책이 아직 확인되지 않았다.
+- 선택: 인증을 UI 컴포넌트에서 분리하고 provider adapter 교체가 가능하도록 구성한다.
+- 이유: 학교 인증 방식이 확정되기 전에도 교육 UX를 독립적으로 검증하기 위해서다.
 - 대안: Google Sheets를 직접 브라우저에서 읽기. 개인정보와 비밀값 노출 위험으로 배제한다.
+
+## 2026-08-09 · 한양대학교 이메일 OTP로 인증 교체
+
+- 선택: Supabase Auth `signInWithOtp`/`verifyOtp`와 Vercel Serverless API.
+- 이유: 비밀번호 없이 실제 `@hanyang.ac.kr` 이메일 소유를 확인하고, Supabase SSR 쿠키 세션으로 access token을 브라우저 저장소에 두지 않기 위해서다.
+- 관리자 기준: 인증된 이메일이 정확히 `belief@hanyang.ac.kr`인 경우만 admin으로 계산한다. 프론트엔드 입력값이나 localStorage role을 신뢰하지 않는다.
+- 제한: 현재 프로젝트는 Vite SPA이므로 로컬 OTP 테스트에는 `vercel dev`가 필요하며, Supabase 환경변수·Hook·이메일 템플릿은 사용자가 직접 설정해야 한다.
 
 ## 2026-08-03 · YouTube는 MVP 플레이어로 사용
 

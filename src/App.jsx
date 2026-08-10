@@ -10,15 +10,22 @@ import {
   ensureEnrollment,
   getCourses,
   getEnrollments,
-  getSession,
   getStudents,
   resetDemoData,
   saveCourses,
   saveEnrollments,
   saveStudents,
-  setSession,
 } from './lib/storage';
-import { isAdminSession, verifyAdminAccess, verifyStudentAccess } from './lib/appScriptAuth';
+import {
+  ADMIN_EMAIL,
+  getAuthSession,
+  isAdminSession,
+  OTP_LENGTH,
+  requestEmailOtp,
+  signOut,
+  verifyEmailOtp,
+} from './lib/emailAuth';
+import { uploadMaterialToDrive } from './lib/appScriptData';
 
 function Icon({ name, size = 18, stroke = 1.8 }) {
   const paths = {
@@ -50,10 +57,11 @@ function App() {
   const [courses, setCourses] = useState(getCourses);
   const [students, setStudents] = useState(getStudents);
   const [enrollments, setEnrollments] = useState(getEnrollments);
-  const [session, setSessionState] = useState(getSession);
+  const [session, setSessionState] = useState(null);
   const [view, setView] = useState('home');
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [authReason, setAuthReason] = useState('');
+  const [authMode, setAuthMode] = useState('student');
   const [notice, setNotice] = useState(null);
   const [language, setLanguage] = useState('KR');
 
@@ -69,47 +77,51 @@ function App() {
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
+  useEffect(() => {
+    let active = true;
+    getAuthSession().then((currentSession) => {
+      if (active) setSessionState(currentSession);
+    }).catch(() => {
+      if (active) setSessionState(null);
+    });
+    return () => { active = false; };
+  }, []);
 
   const navigateHome = () => { setView('home'); setSelectedCourse(null); };
-  const openAuth = (reason = '') => { setAuthReason(reason); setView('auth'); };
-  const handleSignOut = () => { setSession(null); setSessionState(null); setNotice({ type: 'info', text: '로그아웃되었습니다.' }); navigateHome(); };
-  const openAdmin = () => { setView(isAdminSession(session) ? 'admin' : 'admin-auth'); };
-  const handleAuth = async (credentials) => {
-    const result = await verifyStudentAccess(credentials);
+  const openAuth = (reason = '', mode = 'student') => { setAuthReason(reason); setAuthMode(mode); setView('auth'); };
+  const handleSignOut = async () => {
+    try { await signOut(); } finally {
+      setSessionState(null);
+      setNotice({ type: 'info', text: '로그아웃되었습니다.' });
+      navigateHome();
+    }
+  };
+  const openAdmin = () => {
+    if (isAdminSession(session)) setView('admin');
+    else openAuth('', 'admin');
+  };
+  const handleAuth = async ({ email, token, purpose }) => {
+    const result = await verifyEmailOtp({ email, token, purpose });
     if (!result.approved) return result;
     const user = {
-      userId: result.userId,
-      displayName: result.displayName,
-      role: 'student',
-      authProvider: 'apps-script',
+      userId: result.user.userId,
+      displayName: result.user.displayName,
+      email: result.user.email,
+      role: result.user.role,
+      authProvider: 'supabase-email-otp',
       authenticatedAt: new Date().toISOString(),
     };
-    setSession(user);
     setSessionState(user);
-    setNotice({ type: 'success', text: `${user.displayName}님, 인증이 완료되었습니다.` });
-    if (authReason && courses.some((course) => course.id === authReason)) {
+    setNotice({ type: 'success', text: `${user.email} 이메일 인증이 완료되었습니다.` });
+    if (purpose === 'admin') {
+      setView('admin');
+    } else if (authReason && courses.some((course) => course.id === authReason)) {
       const course = courses.find((item) => item.id === authReason);
       setSelectedCourse(course);
       setView('home');
     } else setView('home');
     setAuthReason('');
-    return { ...result, approved: true };
-  };
-  const handleAdminAuth = async (credentials) => {
-    const result = await verifyAdminAccess(credentials);
-    if (!result.approved) return result;
-    const adminUser = {
-      userId: result.userId,
-      displayName: result.displayName,
-      role: 'admin',
-      authProvider: 'apps-script',
-      authenticatedAt: new Date().toISOString(),
-      expiresAt: Date.now() + (8 * 60 * 60 * 1000),
-    };
-    setSession(adminUser);
-    setSessionState(adminUser);
-    setNotice({ type: 'success', text: `${adminUser.displayName}님, 관리자 인증이 완료되었습니다.` });
-    setView('admin');
+    setAuthMode('student');
     return { ...result, approved: true };
   };
   const askToEnroll = (course) => {
@@ -154,8 +166,7 @@ function App() {
     {notice && <Toast notice={notice} onClose={() => setNotice(null)} />}
     <main>
       {view === 'home' && <HomePage courses={courses} session={session} enrollments={enrollments} language={language} onSelect={askToEnroll} onAuth={() => openAuth()} />}
-      {view === 'auth' && <AuthPage onSubmit={handleAuth} onBack={navigateHome} reason={authReason} language={language} />}
-      {view === 'admin-auth' && <AdminAuthPage onSubmit={handleAdminAuth} onBack={navigateHome} />}
+      {view === 'auth' && <AuthPage onRequestOtp={requestEmailOtp} onSubmit={handleAuth} onBack={navigateHome} reason={authReason} language={language} mode={authMode} />}
       {view === 'learn' && selectedCourse && session && <LearnPage course={selectedCourse} enrollment={enrollments[session.userId]?.[selectedCourse.id]} onBack={navigateHome} onProgress={updateProgress} onDownload={(course, material) => setNotice({ type: 'success', text: `${material?.name || course.materialName || '강의자료'} 다운로드를 시작합니다.` })} />}
       {view === 'mypage' && session && <MyPage session={session} courses={courses} enrollments={enrollments[session.userId] || {}} onSelect={askToEnroll} onHome={navigateHome} />}
       {view === 'admin' && isAdminSession(session) && <AdminPage courses={courses} setCourses={setCourses} students={students} setStudents={setStudents} enrollments={enrollments} onReset={reset} onNotice={setNotice} />}
@@ -211,48 +222,62 @@ function CourseCard({ course, enrollment, onSelect, index }) {
   return <article className={`course-card accent-${course.accent}`} style={{ '--delay': `${index * 70}ms` }}><div className="course-art"><div className="art-grain" /><span className="art-label">{course.category}</span><div className="art-symbol"><Icon name={course.category === '전자자료' ? 'search' : course.category === '연구·학습' ? 'chart' : 'book'} size={32} /></div><span className="art-index">0{index + 1}</span></div><div className="course-card-body"><div className="course-meta"><span>{course.level}</span><span>{course.duration}</span></div><h3>{course.title}</h3><p>{course.subtitle}</p><div className="course-footer"><div>{enrollment ? <><span className={`status-dot ${progress >= 50 ? 'done' : 'ongoing'}`} />{progress >= 50 ? '수강 완료' : `수강 중 ${progress}%`}</> : <>{course.audience}</>}</div><button className="card-arrow" onClick={() => onSelect(course)} aria-label={`${course.title} 수강하기`}><Icon name="arrow" size={17} /></button></div>{enrollment && <div className="mini-progress"><span style={{ width: `${progress}%` }} /></div>}</div></article>;
 }
 
-function AuthPage({ onSubmit, onBack, reason, language }) {
-  const [name, setName] = useState('');
-  const [identifier, setIdentifier] = useState('');
+function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language, mode = 'student' }) {
+  const isAdmin = mode === 'admin';
+  const [email, setEmail] = useState('');
+  const [token, setToken] = useState('');
+  const [step, setStep] = useState('email');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const submit = async (event) => {
-    event.preventDefault();
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (!cooldown) return undefined;
+    const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
+
+  const normalizeEmailInput = (value) => value.trim().toLowerCase();
+  const sendOtp = async (event) => {
+    event?.preventDefault();
+    const normalizedEmail = normalizeEmailInput(email);
     setError('');
+    setMessage('');
+    if (!normalizedEmail) { setError('한양대학교 이메일을 입력해 주세요.'); return; }
+    if (!normalizedEmail.endsWith('@hanyang.ac.kr')) { setError('한양대학교 이메일(@hanyang.ac.kr)만 사용할 수 있습니다.'); return; }
+    if (isAdmin && normalizedEmail !== ADMIN_EMAIL) { setError(`관리자 인증은 ${ADMIN_EMAIL} 계정만 사용할 수 있습니다.`); return; }
+    if (cooldown > 0) return;
     setIsSubmitting(true);
     try {
-      const result = await onSubmit({ name, identifier });
-      if (!result?.approved) setError(result?.message || '입력한 정보가 올바르지 않습니다. 이름과 학번/사번을 확인해 주세요.');
+      await onRequestOtp({ email: normalizedEmail, purpose: mode });
+      setEmail(normalizedEmail);
+      setStep('otp');
+      setCooldown(60);
+      setMessage(`${normalizedEmail}로 ${OTP_LENGTH}자리 인증번호를 보냈습니다.`);
+    } catch (submitError) {
+      setError(submitError.message || '인증번호를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  const verifyOtp = async (event) => {
+    event.preventDefault();
+    const normalizedToken = token.replace(/\D/g, '').slice(0, OTP_LENGTH);
+    setError('');
+    if (normalizedToken.length !== OTP_LENGTH) { setError(`인증번호 ${OTP_LENGTH}자리를 입력해 주세요.`); return; }
+    setIsSubmitting(true);
+    try {
+      const result = await onSubmit({ email, token: normalizedToken, purpose: mode });
+      if (!result?.approved) setError(result?.message || '인증번호가 올바르지 않거나 만료되었습니다.');
     } catch (submitError) {
       setError(submitError.message || '인증 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setIsSubmitting(false);
     }
   };
-  return <section className="auth-page page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> PRIVATE ACCESS</p><h1>학습을 시작하기 전,<br /><span>학생 인증</span>이 필요해요.</h1><p>이름과 학번 또는 사번으로 간편하게 인증합니다. Apps Script의 참여자 명단과 실시간으로 대조합니다.</p><div className="privacy-note"><Icon name="lock" size={17} /><span>개인정보 보호를 위해 인증 정보는 로그에 남기지 않습니다.</span></div></div><form className="auth-card" onSubmit={submit}><div className="auth-card-heading"><span className="step-pill">STEP 01 / VERIFY</span><h2>{language === 'EN' ? 'Verify your identity' : '학생 정보 입력'}</h2><p>현재 Google Sheets에 등록된 정보와 일치해야 합니다.</p></div><label>이름<input value={name} onChange={(event) => { setName(event.target.value); setError(''); }} placeholder="홍길동 / Alex Kim" autoComplete="name" required /></label><label>학번 또는 사번<input value={identifier} onChange={(event) => { setIdentifier(event.target.value); setError(''); }} placeholder="예: 20261234" autoComplete="off" required /></label>{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting}>{isSubmitting ? '명단 확인 중...' : '인증하고 계속하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button><div className="demo-login"><span>LIVE DIRECTORY</span><p>참여자 명단은 Apps Script가 연결된 Google Sheets를 기준으로 확인합니다.</p></div></form></div>{reason && <p className="auth-context">선택한 교육을 계속 신청하려면 먼저 인증해 주세요.</p>}</section>;
-}
-
-function AdminAuthPage({ onSubmit, onBack }) {
-  const [name, setName] = useState('');
-  const [identifier, setIdentifier] = useState('');
-  const [error, setError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const submit = async (event) => {
-    event.preventDefault();
-    setError('');
-    setIsSubmitting(true);
-    try {
-      const result = await onSubmit({ name, identifier });
-      if (!result?.approved) setError(result?.message || '관리자 명단과 일치하지 않습니다. 이름과 학번/사번을 확인해 주세요.');
-    } catch (submitError) {
-      setError(submitError.message || '관리자 인증 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return <section className="auth-page admin-auth-page page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> RESTRICTED ACCESS</p><h1>관리자 페이지는<br /><span>승인된 담당자</span>만 이용할 수 있어요.</h1><p>관리자로 등록된 이름과 학번 또는 사번을 입력하면 Apps Script의 허용 명단과 대조해 접근을 승인합니다.</p><div className="privacy-note"><Icon name="lock" size={17} /><span>입력한 정보는 관리자 인증 요청에만 사용합니다.</span></div></div><form className="auth-card" onSubmit={submit}><div className="auth-card-heading"><span className="step-pill">ADMIN ACCESS / VERIFY</span><h2>관리자 정보 입력</h2><p>승인된 담당자 정보만 관리자 화면에 접근할 수 있어요.</p></div><label>관리자 이름<input value={name} onChange={(event) => { setName(event.target.value); setError(''); }} placeholder="홍길동" autoComplete="name" required /></label><label>학번 또는 사번<input value={identifier} onChange={(event) => { setIdentifier(event.target.value); setError(''); }} placeholder="예: 20261234 / ADMIN2026" autoComplete="off" required /></label>{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting}>{isSubmitting ? '인증 확인 중...' : '관리자 인증하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button><div className="demo-login admin-auth-note"><span>SECURE CHECK</span><p>Apps Script가 승인한 결과가 확인될 때만 관리자 세션을 생성합니다.</p></div></form></div></section>;
+  const changeEmail = () => { setStep('email'); setToken(''); setError(''); setMessage(''); };
+  return <section className={`auth-page page-width ${isAdmin ? 'admin-auth-page' : ''}`}><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> {isAdmin ? 'RESTRICTED ACCESS' : 'HANYANG EMAIL ACCESS'}</p><h1>{isAdmin ? <>관리자 페이지는<br /><span>승인된 계정</span>만 이용할 수 있어요.</> : <>학습을 시작하기 전,<br /><span>이메일 인증</span>이 필요해요.</>}</h1><p>{isAdmin ? `${ADMIN_EMAIL} 계정으로만 관리자 화면에 접근할 수 있습니다.` : `한양대학교 이메일로 받은 ${OTP_LENGTH}자리 인증번호를 입력하면 회원가입과 로그인이 한 번에 완료됩니다.`}</p><div className="privacy-note"><Icon name="lock" size={17} /><span>인증 토큰은 브라우저 저장소에 보관하지 않고 보안 쿠키 세션으로 처리합니다.</span></div></div><form className="auth-card" onSubmit={step === 'email' ? sendOtp : verifyOtp}><div className="auth-card-heading"><span className="step-pill">{step === 'email' ? 'STEP 01 / EMAIL' : 'STEP 02 / OTP'}</span><h2>{step === 'email' ? (isAdmin ? '관리자 이메일 입력' : language === 'EN' ? 'Verify your Hanyang email' : '한양대학교 이메일 인증') : '인증번호 입력'}</h2><p>{step === 'email' ? '@hanyang.ac.kr 이메일만 사용할 수 있습니다.' : `${email}로 발송된 ${OTP_LENGTH}자리 숫자를 입력해 주세요.`}</p></div>{step === 'email' ? <label>한양대학교 이메일<input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="name@hanyang.ac.kr" autoComplete="email" autoFocus required /></label> : <><label>인증번호<input className="otp-input" value={token} onChange={(event) => { setToken(event.target.value.replace(/\D/g, '').slice(0, OTP_LENGTH)); setError(''); }} onPaste={(event) => { event.preventDefault(); setToken(event.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH)); }} inputMode="numeric" maxLength={OTP_LENGTH} autoComplete="one-time-code" autoFocus required /></label><div className="otp-actions"><button type="button" className="inline-button" onClick={changeEmail}>이메일 수정</button><button type="button" className="inline-button" onClick={sendOtp} disabled={cooldown > 0 || isSubmitting}>{cooldown > 0 ? `${cooldown}초 후 재전송` : '인증번호 재전송'}</button></div></>}{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}{message && !error && <div className="form-success" role="status"><Icon name="check" size={16} />{message}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting || (step === 'email' && cooldown > 0)}>{isSubmitting ? '처리 중...' : step === 'email' ? '인증번호 받기' : '인증하고 계속하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button>{step === 'otp' && <button type="button" className="text-button auth-secondary-action" onClick={changeEmail}>다른 이메일로 시작하기</button>}<div className="demo-login"><span>{isAdmin ? 'ADMIN POLICY' : 'EMAIL POLICY'}</span><p>{isAdmin ? `${ADMIN_EMAIL} 외 계정은 관리자 권한을 받을 수 없습니다.` : '실제 재학 여부가 아니라 @hanyang.ac.kr 이메일 소유 여부만 확인합니다.'}</p></div></form></div>{reason && <p className="auth-context">선택한 교육을 계속 신청하려면 먼저 이메일 인증을 완료해 주세요.</p>}</section>;
 }
 
 function EnrollmentModal({ course, onConfirm, onCancel }) {
@@ -518,6 +543,8 @@ function CourseEditor({ course, onClose, onSave }) {
   const [videoLink, setVideoLink] = useState(course.videoId ? `https://www.youtube.com/watch?v=${course.videoId}` : '');
   const [newMaterialName, setNewMaterialName] = useState('');
   const [newMaterialUrl, setNewMaterialUrl] = useState('');
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const update = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
   const addMaterial = () => {
@@ -527,15 +554,26 @@ function CourseEditor({ course, onClose, onSave }) {
     setNewMaterialUrl('');
   };
   const removeMaterial = (materialId) => setDraft((current) => ({ ...current, materials: current.materials.filter((material) => material.id !== materialId) }));
-  const save = (event) => {
+  const save = async (event) => {
     event.preventDefault();
     const videoId = extractYouTubeId(videoLink);
     if (!draft.title.trim()) { setError('교육명을 입력해 주세요.'); return; }
     if (!videoId) { setError('YouTube 영상 링크 또는 영상 ID를 입력해 주세요.'); return; }
     const minutes = Number.parseInt(String(draft.duration).replace(/[^0-9]/g, ''), 10) || Number(draft.minutes) || 0;
-    onSave({ ...draft, title: draft.title.trim(), subtitle: draft.subtitle.trim(), description: draft.description.trim(), videoId, minutes, materialName: draft.materials[0]?.name || '', updatedAt: formatAdminDate() });
+    setIsSaving(true);
+    setError('');
+    try {
+      const uploadedMaterials = [];
+      for (const file of pendingFiles) uploadedMaterials.push(await uploadMaterialToDrive(file, draft.id));
+      const materials = [...draft.materials, ...uploadedMaterials];
+      onSave({ ...draft, title: draft.title.trim(), subtitle: draft.subtitle.trim(), description: draft.description.trim(), videoId, minutes, materials, materialName: materials[0]?.name || '', updatedAt: formatAdminDate() });
+    } catch (saveError) {
+      setError(saveError.message || '강의 자료 업로드 중 문제가 발생했습니다.');
+    } finally {
+      setIsSaving(false);
+    }
   };
-  return <div className="modal-backdrop editor-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal admin-editor" onSubmit={save} role="dialog" aria-modal="true" aria-labelledby="course-editor-title"><button type="button" className="modal-close" onClick={onClose} aria-label="편집 닫기"><Icon name="x" size={19} /></button><div className="editor-heading"><p className="eyebrow">CONTENT EDITOR</p><h2 id="course-editor-title">{course.title ? '교육 정보 편집' : '새 교육 등록'}</h2><p>영상 링크, 교육 메타데이터와 강의 자료를 함께 관리합니다.</p></div><div className="editor-grid"><label>교육명<input value={draft.title} onChange={(event) => update('title', event.target.value)} placeholder="교육명을 입력하세요" required /></label><label>짧은 소개<input value={draft.subtitle} onChange={(event) => update('subtitle', event.target.value)} placeholder="교육 카드에 표시할 소개" /></label><label className="editor-wide">상세 설명<textarea value={draft.description} onChange={(event) => update('description', event.target.value)} rows="3" placeholder="교육 상세 설명" /></label><label>YouTube 영상 링크<input value={videoLink} onChange={(event) => { setVideoLink(event.target.value); setError(''); }} placeholder="https://www.youtube.com/watch?v=..." required /></label><label>카테고리<select value={draft.category} onChange={(event) => update('category', event.target.value)}>{categories.slice(1).map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label>난이도<select value={draft.level} onChange={(event) => update('level', event.target.value)}><option>입문</option><option>기초</option><option>중급</option><option>고급</option></select></label><label>교육 시간<input value={draft.duration} onChange={(event) => update('duration', event.target.value)} placeholder="예: 18분" /></label><label>자막/언어<input value={draft.language} onChange={(event) => update('language', event.target.value)} placeholder="KR · EN 자막" /></label><label>추천 대상<input value={draft.audience} onChange={(event) => update('audience', event.target.value)} placeholder="신입생 추천" /></label><label>강조 색상<select value={draft.accent} onChange={(event) => update('accent', event.target.value)}><option value="violet">Violet</option><option value="cyan">Cyan</option><option value="orange">Orange</option><option value="blue">Blue</option></select></label></div><section className="materials-editor"><div className="materials-heading"><div><p className="eyebrow">LECTURE MATERIALS</p><h3>강의 자료</h3></div><span>{draft.materials.length}개</span></div>{draft.materials.length ? <div className="materials-list">{draft.materials.map((material) => <div className="material-editor-row" key={material.id}><div className="material-icon"><Icon name="download" size={16} /></div><div><strong>{material.name}</strong><span>{material.url === '#' ? '다운로드 링크 미등록' : material.url}</span></div><button type="button" className="icon-button material-delete" onClick={() => removeMaterial(material.id)} aria-label={`${material.name} 삭제`}><Icon name="trash" size={15} /></button></div>)}</div> : <div className="admin-empty material-editor-empty">등록된 강의 자료가 없습니다.</div>}<div className="material-add-row"><input value={newMaterialName} onChange={(event) => setNewMaterialName(event.target.value)} placeholder="자료명 (예: 검색 치트시트.pdf)" aria-label="추가할 자료명" /><input value={newMaterialUrl} onChange={(event) => setNewMaterialUrl(event.target.value)} placeholder="자료 URL (선택)" aria-label="추가할 자료 URL" /><button type="button" className="button button-ghost button-small" onClick={addMaterial}><Icon name="plus" size={14} /> 자료 추가</button></div></section>{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}<div className="editor-footer"><label className="publish-toggle"><input type="checkbox" checked={draft.published} onChange={(event) => update('published', event.target.checked)} /><span>교육 공개</span></label><div className="modal-actions"><button type="button" className="button button-ghost" onClick={onClose}>취소</button><button type="submit" className="button button-primary"><Icon name="check" size={16} /> 저장하기</button></div></div></form></div>;
+  return <div className="modal-backdrop editor-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal admin-editor" onSubmit={save} role="dialog" aria-modal="true" aria-labelledby="course-editor-title"><button type="button" className="modal-close" onClick={onClose} aria-label="편집 닫기"><Icon name="x" size={19} /></button><div className="editor-heading"><p className="eyebrow">CONTENT EDITOR</p><h2 id="course-editor-title">{course.title ? '교육 정보 편집' : '새 교육 등록'}</h2><p>영상 링크, 교육 메타데이터와 강의 자료를 함께 관리합니다.</p></div><div className="editor-grid"><label>교육명<input value={draft.title} onChange={(event) => update('title', event.target.value)} placeholder="교육명을 입력하세요" required /></label><label>짧은 소개<input value={draft.subtitle} onChange={(event) => update('subtitle', event.target.value)} placeholder="교육 카드에 표시할 소개" /></label><label className="editor-wide">상세 설명<textarea value={draft.description} onChange={(event) => update('description', event.target.value)} rows="3" placeholder="교육 상세 설명" /></label><label>YouTube 영상 링크<input value={videoLink} onChange={(event) => { setVideoLink(event.target.value); setError(''); }} placeholder="https://www.youtube.com/watch?v=..." required /></label><label>카테고리<select value={draft.category} onChange={(event) => update('category', event.target.value)}>{categories.slice(1).map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label>난이도<select value={draft.level} onChange={(event) => update('level', event.target.value)}><option>입문</option><option>기초</option><option>중급</option><option>고급</option></select></label><label>교육 시간<input value={draft.duration} onChange={(event) => update('duration', event.target.value)} placeholder="예: 18분" /></label><label>자막/언어<input value={draft.language} onChange={(event) => update('language', event.target.value)} placeholder="KR · EN 자막" /></label><label>추천 대상<input value={draft.audience} onChange={(event) => update('audience', event.target.value)} placeholder="신입생 추천" /></label><label>강조 색상<select value={draft.accent} onChange={(event) => update('accent', event.target.value)}><option value="violet">Violet</option><option value="cyan">Cyan</option><option value="orange">Orange</option><option value="blue">Blue</option></select></label></div><section className="materials-editor"><div className="materials-heading"><div><p className="eyebrow">LECTURE MATERIALS</p><h3>강의 자료</h3></div><span>{draft.materials.length + pendingFiles.length}개</span></div>{draft.materials.length ? <div className="materials-list">{draft.materials.map((material) => <div className="material-editor-row" key={material.id}><div className="material-icon"><Icon name="download" size={16} /></div><div><strong>{material.name}</strong><span>{material.fileId ? `Google Drive 파일 · ${material.fileId}` : material.url === '#' ? '다운로드 링크 미등록' : material.url}</span></div><button type="button" className="icon-button material-delete" onClick={() => removeMaterial(material.id)} aria-label={`${material.name} 삭제`}><Icon name="trash" size={15} /></button></div>)}</div> : <div className="admin-empty material-editor-empty">등록된 강의 자료가 없습니다.</div>}<div className="material-upload-row"><label className="file-upload-control"><Icon name="plus" size={15} /> 파일 선택<input type="file" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.zip,.txt" onChange={(event) => setPendingFiles(Array.from(event.target.files || []))} /></label><span>저장할 때 Google Drive에 업로드됩니다. 파일당 최대 10MB</span></div>{pendingFiles.length > 0 && <div className="pending-file-list">{pendingFiles.map((file) => <div className="pending-file" key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="icon-button" onClick={() => setPendingFiles((files) => files.filter((item) => item !== file))} aria-label={`${file.name} 업로드 취소`}><Icon name="x" size={14} /></button></div>)}</div>}<div className="material-add-row"><input value={newMaterialName} onChange={(event) => setNewMaterialName(event.target.value)} placeholder="링크 자료명 (선택)" aria-label="추가할 자료명" /><input value={newMaterialUrl} onChange={(event) => setNewMaterialUrl(event.target.value)} placeholder="자료 URL (선택)" aria-label="추가할 자료 URL" /><button type="button" className="button button-ghost button-small" onClick={addMaterial}><Icon name="plus" size={14} /> 링크 자료 추가</button></div></section>{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}<div className="editor-footer"><label className="publish-toggle"><input type="checkbox" checked={draft.published} onChange={(event) => update('published', event.target.checked)} /><span>교육 공개</span></label><div className="modal-actions"><button type="button" className="button button-ghost" onClick={onClose} disabled={isSaving}>취소</button><button type="submit" className="button button-primary" disabled={isSaving}>{isSaving ? '자료 업로드 중...' : <><Icon name="check" size={16} /> 저장하기</>}</button></div></div></form></div>;
 }
 
 function EnrollmentsPanel({ students, courses, items }) {
