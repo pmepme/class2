@@ -15,6 +15,8 @@
 ## 세션과 토큰
 
 - OTP 발송·검증은 Supabase Auth를 사용한다.
+- 최초 인증 후 설정한 비밀번호는 Supabase Auth에만 전달하며 애플리케이션 DB나 localStorage에 저장하지 않는다.
+- 이름과 학번은 인증된 사용자 본인의 `profiles` 행에만 저장하며, 학번은 중복을 허용하지 않는다.
 - 세션은 Vercel API가 Supabase SSR cookie adapter로 HttpOnly 쿠키에 설정한다.
 - access token, refresh token, `isLoggedIn=true` 값을 localStorage/sessionStorage에 저장하지 않는다.
 - 로그아웃은 `/api/auth/logout`에서 `supabase.auth.signOut()`을 호출한다.

@@ -95,7 +95,7 @@ export async function getSafeUser(supabase) {
   const email = normalizeEmail(authUser.email);
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('id, email, display_name, role, active, onboarding_completed')
+    .select('id, email, display_name, student_id, role, active, onboarding_completed')
     .eq('id', authUser.id)
     .maybeSingle();
   if (profileError && profileError.code !== 'PGRST116') throw profileError;
@@ -105,7 +105,8 @@ export async function getSafeUser(supabase) {
   return {
     userId: authUser.id,
     email,
-    displayName: email,
+    displayName: profile?.display_name || email,
+    studentId: profile?.student_id || '',
     role,
     onboardingCompleted: Boolean(profile?.onboarding_completed),
   };

@@ -15,8 +15,10 @@ import {
 } from './lib/storage';
 import {
   HANYANG_DOMAIN,
+  completeProfile,
   getAuthSession,
   isAdminSession,
+  loginWithPassword,
   OTP_LENGTH,
   requestEmailOtp,
   signOut,
@@ -93,23 +95,24 @@ function App() {
     }
   };
   const openAdmin = () => { if (isAdminSession(session)) setView('admin'); };
-  const handleAuth = async ({ email, token }) => {
-    const result = await verifyEmailOtp({ email, token });
-    if (!result.approved) return result;
+  const applyAuthenticatedUser = (resultUser, authProvider = 'supabase-password') => {
     const user = {
-      userId: result.user.userId,
-      displayName: result.user.displayName,
-      email: result.user.email,
-      role: result.user.role,
-      authProvider: 'supabase-email-otp',
+      userId: resultUser.userId,
+      displayName: resultUser.displayName || resultUser.email,
+      studentId: resultUser.studentId || '',
+      email: resultUser.email,
+      role: resultUser.role,
+      onboardingCompleted: Boolean(resultUser.onboardingCompleted),
+      authProvider,
       authenticatedAt: new Date().toISOString(),
     };
     setStudents((currentStudents) => {
       const nextStudent = {
         userId: user.userId,
         email: user.email,
-        name: user.email,
-        identifier: user.email,
+        name: user.displayName,
+        identifier: user.studentId || user.email,
+        studentId: user.studentId,
         role: user.role,
         active: true,
       };
@@ -118,14 +121,32 @@ function App() {
         : [...currentStudents, nextStudent];
     });
     setSessionState(user);
-    setNotice({ type: 'success', text: `${user.email} 이메일 인증이 완료되었습니다.` });
+    setNotice({ type: 'success', text: `${user.displayName}님, 로그인이 완료되었습니다.` });
     if (authReason && courses.some((course) => course.id === authReason)) {
       const course = courses.find((item) => item.id === authReason);
       setSelectedCourse(course);
       setView('home');
     } else setView('home');
     setAuthReason('');
-    return { ...result, approved: true };
+    return user;
+  };
+  const handleOtpVerification = async ({ email, token }) => {
+    const result = await verifyEmailOtp({ email, token });
+    if (!result.approved) return result;
+    if (result.user?.onboardingCompleted || result.user?.role === 'admin') {
+      applyAuthenticatedUser(result.user, 'supabase-email-otp');
+    }
+    return result;
+  };
+  const handlePasswordLogin = async ({ email, password }) => {
+    const result = await loginWithPassword({ email, password });
+    if (result.authenticated && result.user) applyAuthenticatedUser(result.user);
+    return result;
+  };
+  const handleCompleteProfile = async ({ password, displayName, studentId }) => {
+    const result = await completeProfile({ password, displayName, studentId });
+    if (result.approved && result.user) applyAuthenticatedUser(result.user, 'supabase-password');
+    return result;
   };
   const askToEnroll = (course) => {
     if (!session) { openAuth(course.id); return; }
@@ -162,7 +183,7 @@ function App() {
     {notice && <Toast notice={notice} onClose={() => setNotice(null)} />}
     <main>
       {view === 'home' && <HomePage courses={courses} session={session} enrollments={enrollments} language={language} onSelect={askToEnroll} onAuth={() => openAuth()} />}
-      {view === 'auth' && <AuthPage onRequestOtp={requestEmailOtp} onSubmit={handleAuth} onBack={navigateHome} reason={authReason} language={language} />}
+      {view === 'auth' && <AuthPage onRequestOtp={requestEmailOtp} onVerifyEmail={handleOtpVerification} onLogin={handlePasswordLogin} onCompleteProfile={handleCompleteProfile} onBack={navigateHome} reason={authReason} language={language} />}
       {view === 'learn' && selectedCourse && session && <LearnPage course={selectedCourse} enrollment={enrollments[session.userId]?.[selectedCourse.id]} onBack={navigateHome} onProgress={updateProgress} onDownload={(course, material) => setNotice({ type: 'success', text: `${material?.name || course.materialName || '강의자료'} 다운로드를 시작합니다.` })} />}
       {view === 'mypage' && session && <MyPage session={session} courses={courses} enrollments={enrollments[session.userId] || {}} onSelect={askToEnroll} onHome={navigateHome} />}
       {view === 'admin' && isAdminSession(session) && <AdminPage courses={courses} setCourses={setCourses} students={students} setStudents={setStudents} enrollments={enrollments} onNotice={setNotice} />}
@@ -218,11 +239,16 @@ function CourseCard({ course, enrollment, onSelect, index }) {
   return <article className={`course-card accent-${course.accent}`} style={{ '--delay': `${index * 70}ms` }}><div className="course-art"><div className="art-grain" /><span className="art-label">{course.category}</span><div className="art-symbol"><Icon name={course.category === '전자자료' ? 'search' : course.category === '연구·학습' ? 'chart' : 'book'} size={32} /></div><span className="art-index">0{index + 1}</span></div><div className="course-card-body"><div className="course-meta"><span>{course.level}</span><span>{course.duration}</span></div><h3>{course.title}</h3><p>{course.subtitle}</p><div className="course-footer"><div>{enrollment ? <><span className={`status-dot ${progress >= 50 ? 'done' : 'ongoing'}`} />{progress >= 50 ? '수강 완료' : `수강 중 ${progress}%`}</> : <>{course.audience}</>}</div><button className="card-arrow" onClick={() => onSelect(course)} aria-label={`${course.title} 수강하기`}><Icon name="arrow" size={17} /></button></div>{enrollment && <div className="mini-progress"><span style={{ width: `${progress}%` }} /></div>}</div></article>;
 }
 
-function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language }) {
+function AuthPage({ onRequestOtp, onVerifyEmail, onLogin, onCompleteProfile, onBack, reason, language }) {
   const [emailId, setEmailId] = useState('');
   const [email, setEmail] = useState('');
   const [token, setToken] = useState('');
-  const [step, setStep] = useState('email');
+  const [mode, setMode] = useState(() => (reason ? 'signup' : 'login'));
+  const [step, setStep] = useState(() => (reason ? 'email' : 'credentials'));
+  const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [studentId, setStudentId] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -235,14 +261,41 @@ function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language }) {
   }, [cooldown]);
 
   const normalizeEmailIdInput = (value) => value.trim().toLowerCase().replace(/@hanyang\.ac\.kr$/i, '');
-  const sendOtp = async (event) => {
-    event?.preventDefault();
-    const normalizedId = normalizeEmailIdInput(emailId);
-    const normalizedEmail = `${normalizedId}@${HANYANG_DOMAIN}`;
+  const resetForm = (nextMode) => {
+    setMode(nextMode);
+    setStep(nextMode === 'login' ? 'credentials' : 'email');
+    setToken('');
+    setPassword('');
+    setPasswordConfirm('');
+    setDisplayName('');
+    setStudentId('');
+    setCooldown(0);
     setError('');
     setMessage('');
-    if (!normalizedId) { setError('한양대학교 이메일 아이디를 입력해 주세요.'); return; }
-    if (normalizedId.includes('@') || /\s/.test(normalizedId)) { setError('이메일 아이디만 입력해 주세요.'); return; }
+  };
+  const switchMode = (nextMode) => {
+    if (nextMode === mode) return;
+    resetForm(nextMode);
+  };
+  const getNormalizedEmail = () => {
+    const normalizedId = normalizeEmailIdInput(emailId);
+    if (!normalizedId) {
+      setError('한양대학교 이메일 아이디를 입력해 주세요.');
+      return null;
+    }
+    if (normalizedId.includes('@') || /\s/.test(normalizedId)) {
+      setError('이메일 아이디만 입력해 주세요.');
+      return null;
+    }
+    return { normalizedId, normalizedEmail: `${normalizedId}@${HANYANG_DOMAIN}` };
+  };
+  const sendOtp = async (event) => {
+    event?.preventDefault();
+    setError('');
+    setMessage('');
+    const normalizedEmailData = getNormalizedEmail();
+    if (!normalizedEmailData) return;
+    const { normalizedId, normalizedEmail } = normalizedEmailData;
     if (cooldown > 0) return;
     setIsSubmitting(true);
     try {
@@ -265,16 +318,55 @@ function AuthPage({ onRequestOtp, onSubmit, onBack, reason, language }) {
     if (normalizedToken.length !== OTP_LENGTH) { setError(`인증번호 ${OTP_LENGTH}자리를 입력해 주세요.`); return; }
     setIsSubmitting(true);
     try {
-      const result = await onSubmit({ email, token: normalizedToken });
+      const result = await onVerifyEmail({ email, token: normalizedToken });
       if (!result?.approved) setError(result?.message || '인증번호가 올바르지 않거나 만료되었습니다.');
+      else if (!result.user?.onboardingCompleted && result.user?.role !== 'admin') {
+        setStep('profile');
+        setMessage('이메일 인증이 완료되었습니다. 회원 정보를 설정해 주세요.');
+      }
     } catch (submitError) {
       setError(submitError.message || '인증 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setIsSubmitting(false);
     }
   };
+  const login = async (event) => {
+    event.preventDefault();
+    setError('');
+    const normalizedEmailData = getNormalizedEmail();
+    if (!normalizedEmailData) return;
+    if (!password) { setError('비밀번호를 입력해 주세요.'); return; }
+    setIsSubmitting(true);
+    try {
+      const result = await onLogin({ email: normalizedEmailData.normalizedEmail, password });
+      if (!result?.authenticated) setError(result?.message || '이메일 또는 비밀번호를 확인해 주세요.');
+    } catch (submitError) {
+      setError(submitError.message || '로그인하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  const completeSignup = async (event) => {
+    event.preventDefault();
+    setError('');
+    if (password.length < 8) { setError('비밀번호는 8자 이상 입력해 주세요.'); return; }
+    if (password !== passwordConfirm) { setError('비밀번호가 서로 일치하지 않습니다.'); return; }
+    if (!displayName.trim()) { setError('이름을 입력해 주세요.'); return; }
+    if (!studentId.trim()) { setError('학번을 입력해 주세요.'); return; }
+    setIsSubmitting(true);
+    try {
+      const result = await onCompleteProfile({ password, displayName, studentId });
+      if (!result?.approved) setError(result?.message || '회원가입을 완료하지 못했습니다.');
+    } catch (submitError) {
+      setError(submitError.message || '회원가입을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
   const changeEmail = () => { setStep('email'); setToken(''); setError(''); setMessage(''); };
-  return <section className="auth-page page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> HANYANG EMAIL ACCESS</p><h1>학습을 시작하기 전,<br /><span>이메일 인증</span>이 필요해요.</h1><p>한양대학교 이메일로 받은 {OTP_LENGTH}자리 인증번호를 입력하면 회원가입과 로그인이 한 번에 완료됩니다.</p><div className="privacy-note"><Icon name="lock" size={17} /><span>인증 토큰은 브라우저 저장소에 보관하지 않고 보안 쿠키 세션으로 처리합니다.</span></div></div><form className="auth-card" onSubmit={step === 'email' ? sendOtp : verifyOtp}><div className="auth-card-heading"><span className="step-pill">{step === 'email' ? 'STEP 01 / EMAIL' : 'STEP 02 / OTP'}</span><h2>{step === 'email' ? (language === 'EN' ? 'Verify your Hanyang email' : '한양대학교 이메일 인증') : '인증번호 입력'}</h2><p>{step === 'email' ? `@${HANYANG_DOMAIN} 이메일 아이디를 입력해 주세요.` : `${email}로 발송된 ${OTP_LENGTH}자리 숫자를 입력해 주세요.`}</p></div>{step === 'email' ? <label>한양대학교 이메일<div className="email-input-wrap"><input type="text" value={emailId} onChange={(event) => { setEmailId(event.target.value); setError(''); }} placeholder="name" autoComplete="username" autoFocus required aria-label="한양대학교 이메일 아이디" /><span className="email-input-suffix">@{HANYANG_DOMAIN}</span></div></label> : <><label>인증번호<input className="otp-input" value={token} onChange={(event) => { setToken(event.target.value.replace(/\D/g, '').slice(0, OTP_LENGTH)); setError(''); }} onPaste={(event) => { event.preventDefault(); setToken(event.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH)); }} inputMode="numeric" maxLength={OTP_LENGTH} autoComplete="one-time-code" autoFocus required /></label><div className="otp-actions"><button type="button" className="inline-button" onClick={changeEmail}>이메일 수정</button><button type="button" className="inline-button" onClick={sendOtp} disabled={cooldown > 0 || isSubmitting}>{cooldown > 0 ? `${cooldown}초 후 재전송` : '인증번호 재전송'}</button></div></>}{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}{message && !error && <div className="form-success" role="status"><Icon name="check" size={16} />{message}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting || (step === 'email' && cooldown > 0)}>{isSubmitting ? '처리 중...' : step === 'email' ? '인증번호 받기' : '인증하고 계속하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button>{step === 'otp' && <button type="button" className="text-button auth-secondary-action" onClick={changeEmail}>다른 이메일로 시작하기</button>}</form></div>{reason && <p className="auth-context">선택한 교육을 계속 신청하려면 먼저 이메일 인증을 완료해 주세요.</p>}</section>;
+  const renderEmailField = () => <label>한양대학교 이메일<div className="email-input-wrap"><input type="text" value={emailId} onChange={(event) => { setEmailId(event.target.value); setError(''); }} placeholder="name" autoComplete="username" autoFocus required aria-label="한양대학교 이메일 아이디" /><span className="email-input-suffix">@{HANYANG_DOMAIN}</span></div></label>;
+  const isSignupProfile = mode === 'signup' && step === 'profile';
+  return <section className="auth-page page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록으로</button><div className="auth-layout"><div className="auth-intro"><p className="eyebrow"><span className="eyebrow-dot" /> HANYANG EMAIL ACCESS</p><h1>한 번 인증하고,<br /><span>편하게 학습</span>하세요.</h1><p>처음 한 번만 한양대학교 이메일을 인증하고, 비밀번호·이름·학번을 설정하면 다음부터는 이메일과 비밀번호로 바로 로그인할 수 있어요.</p><div className="privacy-note"><Icon name="lock" size={17} /><span>인증 토큰과 비밀번호는 브라우저 저장소에 보관하지 않고 보안 세션으로 처리합니다.</span></div></div><form className="auth-card" onSubmit={mode === 'login' ? login : step === 'email' ? sendOtp : step === 'otp' ? verifyOtp : completeSignup}><div className="auth-tabs" role="tablist" aria-label="인증 방식"><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => switchMode('login')}>로그인</button><button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => switchMode('signup')}>회원가입</button></div><div className="auth-card-heading"><span className="step-pill">{mode === 'login' ? 'EMAIL LOGIN' : isSignupProfile ? 'STEP 03 / PROFILE' : step === 'email' ? 'STEP 01 / EMAIL' : 'STEP 02 / OTP'}</span><h2>{mode === 'login' ? '이메일로 로그인' : isSignupProfile ? '회원 정보 설정' : step === 'email' ? '한양대학교 이메일 인증' : '인증번호 입력'}</h2><p>{mode === 'login' ? `가입한 @${HANYANG_DOMAIN} 이메일과 비밀번호를 입력해 주세요.` : isSignupProfile ? '이름과 학번을 입력하고 로그인 비밀번호를 설정해 주세요.' : step === 'email' ? `@${HANYANG_DOMAIN} 이메일을 인증하면 회원가입을 시작할 수 있어요.` : `${email}로 발송된 ${OTP_LENGTH}자리 숫자를 입력해 주세요.`}</p></div>{mode === 'login' && <>{renderEmailField()}<label>비밀번호<input type="password" value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder="비밀번호" autoComplete="current-password" required /></label></>}{mode === 'signup' && step === 'email' && renderEmailField()}{mode === 'signup' && step === 'otp' && <><label>인증번호<input className="otp-input" value={token} onChange={(event) => { setToken(event.target.value.replace(/\D/g, '').slice(0, OTP_LENGTH)); setError(''); }} onPaste={(event) => { event.preventDefault(); setToken(event.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH)); }} inputMode="numeric" maxLength={OTP_LENGTH} autoComplete="one-time-code" autoFocus required /></label><div className="otp-actions"><button type="button" className="inline-button" onClick={changeEmail}>이메일 수정</button><button type="button" className="inline-button" onClick={sendOtp} disabled={cooldown > 0 || isSubmitting}>{cooldown > 0 ? `${cooldown}초 후 재전송` : '인증번호 재전송'}</button></div></>}{isSignupProfile && <><div className="verified-email"><span>인증된 이메일</span><strong>{email}</strong></div><div className="profile-fields"><label>이름<input type="text" value={displayName} onChange={(event) => { setDisplayName(event.target.value); setError(''); }} placeholder="홍길동" autoComplete="name" autoFocus required /></label><label>학번<input type="text" value={studentId} onChange={(event) => { setStudentId(event.target.value); setError(''); }} placeholder="2026000000" autoComplete="off" required /></label></div><label>비밀번호<input type="password" value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder="8자 이상" autoComplete="new-password" required /></label><label>비밀번호 확인<input type="password" value={passwordConfirm} onChange={(event) => { setPasswordConfirm(event.target.value); setError(''); }} placeholder="비밀번호를 한 번 더 입력" autoComplete="new-password" required /></label></>}{error && <div className="form-error" role="alert"><Icon name="x" size={16} />{error}</div>}{message && !error && <div className="form-success" role="status"><Icon name="check" size={16} />{message}</div>}<button className="button button-dark button-wide" type="submit" disabled={isSubmitting || (mode === 'signup' && step === 'email' && cooldown > 0)}>{isSubmitting ? '처리 중...' : mode === 'login' ? '로그인' : isSignupProfile ? '회원가입 완료' : step === 'email' ? '인증번호 받기' : '인증하고 계속하기'} {!isSubmitting && <Icon name="arrow" size={17} />}</button>{mode === 'login' ? <button type="button" className="text-button auth-secondary-action" onClick={() => switchMode('signup')}>처음 이용하시나요? 이메일 인증 후 회원가입</button> : step === 'otp' ? <button type="button" className="text-button auth-secondary-action" onClick={changeEmail}>다른 이메일로 시작하기</button> : step === 'profile' ? <p className="auth-form-note">인증된 이메일: {email}</p> : null}</form></div>{reason && <p className="auth-context">선택한 교육을 계속 신청하려면 먼저 회원가입 또는 로그인을 완료해 주세요.</p>}</section>;
 }
 
 function EnrollmentModal({ course, onConfirm, onCancel }) {
@@ -385,7 +477,6 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
   const playerHostRef = useRef(null);
   const playerRef = useRef(null);
   const onProgressRef = useRef(onProgress);
-  const fallbackDuration = Math.max(0, (Number(course.minutes) || 0) * 60);
   const hasPersistedRanges = Array.isArray(enrollment?.watchedRanges);
   const persistedRanges = hasPersistedRanges
     ? normalizeWatchedRanges(enrollment.watchedRanges)
@@ -401,13 +492,7 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
   const [speed, setSpeed] = useState('1.0');
   const [caption, setCaption] = useState('ko');
   const [savedAt, setSavedAt] = useState('');
-  const [showControls, setShowControls] = useState(false);
   const [playerMode, setPlayerMode] = useState('loading');
-  const [durationSeconds, setDurationSeconds] = useState(fallbackDuration);
-  const [currentPosition, setCurrentPosition] = useState(() => {
-    const lastPosition = Number(enrollment?.lastPosition) || 0;
-    return fallbackDuration ? Math.min(100, Math.max(0, Math.round((lastPosition / fallbackDuration) * 100))) : 0;
-  });
   const embedUrl = `https://www.youtube.com/embed/${course.videoId}?enablejsapi=1&cc_load_policy=1&cc_lang_pref=${caption}&playsinline=1&rel=0`;
   const materials = getCourseMaterials(course);
   useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
@@ -423,9 +508,6 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
       const currentTime = Number(player.getCurrentTime());
       if (!duration || !Number.isFinite(currentTime)) return;
       const now = performance.now();
-      const currentPositionPercent = Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)));
-      setDurationSeconds(duration);
-      setCurrentPosition(currentPositionPercent);
 
       if (!hasPersistedRanges && watchedRangesRef.current.length === 0 && (legacyWatchedSeconds > 0 || legacyProgress > 0)) {
         const legacyEnd = Math.min(duration, legacyWatchedSeconds || (duration * legacyProgress) / 100);
@@ -477,7 +559,6 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
             if (cancelled) return;
             const duration = Number(event.target.getDuration());
             if (duration) {
-              setDurationSeconds(duration);
               if (!hasPersistedRanges && watchedRangesRef.current.length === 0 && (legacyWatchedSeconds > 0 || legacyProgress > 0)) {
                 const legacyEnd = Math.min(duration, legacyWatchedSeconds || (duration * legacyProgress) / 100);
                 watchedRangesRef.current = legacyEnd > 0 ? [[0, legacyEnd]] : [];
@@ -527,14 +608,6 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
     const fallbackTime = Number(enrollment?.lastPosition) || 0;
     onProgress(course.id, Number(progress), Math.round(Number.isFinite(playerTime) ? playerTime : fallbackTime), Math.round(watchedSecondsRef.current), watchedRangesRef.current);
     setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
-    setShowControls(false);
-  };
-  const seekToProgress = (value) => {
-    const nextProgress = Number(value);
-    setCurrentPosition(nextProgress);
-    setShowControls(true);
-    observationRef.current = { time: null, at: null };
-    if (playerRef.current?.seekTo && durationSeconds) playerRef.current.seekTo((durationSeconds * nextProgress) / 100, true);
   };
   useEffect(() => { setProgress(Number(enrollment?.progress) || 0); }, [enrollment?.progress]);
   useEffect(() => {
@@ -542,7 +615,7 @@ function LearnPage({ course, enrollment, onBack, onProgress, onDownload }) {
       playerRef.current.setOption('captions', 'track', { language: caption });
     }
   }, [caption, playerMode]);
-  return <section className="learn-page"><div className="learn-topbar page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록</button><span className="learn-label">NOW LEARNING</span><span className="learn-course-number">{course.category} / {course.level}</span></div><div className="learn-layout page-width"><div className="video-column"><div className="video-frame">{playerMode === 'fallback' ? <iframe title={course.title} src={embedUrl} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /> : <div ref={playerHostRef} className="youtube-player-host" />}{playerMode === 'loading' && <div className="video-loading">YouTube 플레이어 연결 중...</div>}</div><div className="video-underbar"><div><span className="player-overline">YOUR PROGRESS</span><strong>{progress}% <small>{progress >= 50 ? '수강 완료' : '수강 중'}</small></strong></div><button className="button button-small button-dark" onClick={save}><Icon name="check" size={15} /> 진행률 저장</button></div><div className="range-wrap"><input type="range" min="0" max="100" value={currentPosition} onChange={(event) => seekToProgress(event.target.value)} aria-label="영상 위치 이동" /><div className="range-labels"><span>시작</span><span>{course.duration} · 현재 위치 이동</span><span>끝</span></div></div>{showControls && <p className="save-hint">영상 위치를 변경했습니다. 이동한 위치에서 실제로 재생된 구간만 수강률에 반영됩니다.</p>}{savedAt && <p className="saved-time"><Icon name="check" size={14} /> {savedAt}에 진행률을 저장했습니다.</p>}<div className="player-tools"><div><span className="tool-label">배속</span>{['1.0', '1.25', '1.5', '2.0'].map((item) => <button key={item} className={speed === item ? 'selected' : ''} onClick={() => { setSpeed(item); sendPlayerCommand('setPlaybackRate', [Number(item)]); }}>{item}x</button>)}</div><div><span className="tool-label">자막</span><button className={caption === 'ko' ? 'selected' : ''} onClick={() => setCaption('ko')}>한국어</button><button className={caption === 'en' ? 'selected' : ''} onClick={() => setCaption('en')}>English</button></div></div></div><aside className="lesson-sidebar"><p className="eyebrow">LESSON 01</p><h1>{course.title}</h1><p className="lesson-subtitle">{course.subtitle}</p><div className="sidebar-divider" /><div className="lesson-facts"><div><span>교육 시간</span><strong>{course.duration}</strong></div><div><span>난이도</span><strong>{course.level}</strong></div><div><span>업데이트</span><strong>{course.updatedAt}</strong></div></div><div className="material-list">{materials.length ? materials.map((material) => <div className="material-card" key={material.id}><div className="material-icon"><Icon name="download" size={20} /></div><div><strong>강의자료</strong><span>{material.name}</span></div>{material.url && material.url !== '#' ? <a href={material.url} target="_blank" rel="noreferrer" aria-label={`${material.name} 다운로드`}><Icon name="external" size={16} /></a> : <button onClick={() => onDownload(course, material)} aria-label="강의자료 다운로드"><Icon name="download" size={17} /></button>}</div>) : <div className="material-card material-empty"><div className="material-icon"><Icon name="book" size={18} /></div><div><strong>강의자료</strong><span>등록된 자료가 없습니다.</span></div></div>}</div><div className="lesson-tip"><span>TIP</span><p>자막은 영상 플레이어의 CC 버튼에서도 언어를 바꿀 수 있어요.</p></div></aside></div></section>;
+  return <section className="learn-page"><div className="learn-topbar page-width"><button className="back-link" onClick={onBack}><Icon name="arrowLeft" size={16} /> 교육 목록</button><span className="learn-label">NOW LEARNING</span><span className="learn-course-number">{course.category} / {course.level}</span></div><div className="learn-layout page-width"><div className="video-column"><div className="video-frame">{playerMode === 'fallback' ? <iframe title={course.title} src={embedUrl} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /> : <div ref={playerHostRef} className="youtube-player-host" />}{playerMode === 'loading' && <div className="video-loading">YouTube 플레이어 연결 중...</div>}</div><div className="video-underbar"><div><span className="player-overline">YOUR PROGRESS</span><strong>{progress}% <small>{progress >= 50 ? '수강 완료' : '수강 중'}</small></strong></div><button className="button button-small button-dark" onClick={save}><Icon name="check" size={15} /> 진행률 저장</button></div><div className="progress-wrap"><div className="progress-track" role="progressbar" aria-label="실제 수강 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><span className="progress-fill" style={{ width: `${progress}%` }} /></div><div className="range-labels"><span>시작</span><span>{course.duration} · 실제 시청 구간 기준</span><span>완료</span></div></div>{savedAt && <p className="saved-time"><Icon name="check" size={14} /> {savedAt}에 진행률을 저장했습니다.</p>}<div className="player-tools"><div><span className="tool-label">배속</span>{['1.0', '1.25', '1.5', '2.0'].map((item) => <button key={item} className={speed === item ? 'selected' : ''} onClick={() => { setSpeed(item); sendPlayerCommand('setPlaybackRate', [Number(item)]); }}>{item}x</button>)}</div><div><span className="tool-label">자막</span><button className={caption === 'ko' ? 'selected' : ''} onClick={() => setCaption('ko')}>한국어</button><button className={caption === 'en' ? 'selected' : ''} onClick={() => setCaption('en')}>English</button></div></div></div><aside className="lesson-sidebar"><p className="eyebrow">LESSON 01</p><h1>{course.title}</h1><p className="lesson-subtitle">{course.subtitle}</p><div className="sidebar-divider" /><div className="lesson-facts"><div><span>교육 시간</span><strong>{course.duration}</strong></div><div><span>난이도</span><strong>{course.level}</strong></div><div><span>업데이트</span><strong>{course.updatedAt}</strong></div></div><div className="material-list">{materials.length ? materials.map((material) => <div className="material-card" key={material.id}><div className="material-icon"><Icon name="download" size={20} /></div><div><strong>강의자료</strong><span>{material.name}</span></div>{material.url && material.url !== '#' ? <a href={material.url} target="_blank" rel="noreferrer" aria-label={`${material.name} 다운로드`}><Icon name="external" size={16} /></a> : <button onClick={() => onDownload(course, material)} aria-label="강의자료 다운로드"><Icon name="download" size={17} /></button>}</div>) : <div className="material-card material-empty"><div className="material-icon"><Icon name="book" size={18} /></div><div><strong>강의자료</strong><span>등록된 자료가 없습니다.</span></div></div>}</div><div className="lesson-tip"><span>TIP</span><p>자막은 영상 플레이어의 CC 버튼에서도 언어를 바꿀 수 있어요.</p></div></aside></div></section>;
 }
 
 function MyPage({ session, courses, enrollments, onSelect, onHome }) {

@@ -49,6 +49,19 @@ export function verifyEmailOtp({ email, token, purpose = 'student' }) {
   });
 }
 
+export function loginWithPassword({ email, password }) {
+  const normalizedEmail = normalizeHanyangEmail(email);
+  if (!isHanyangEmail(normalizedEmail)) {
+    return Promise.reject(new Error('한양대학교 이메일(@hanyang.ac.kr)만 사용할 수 있습니다.'));
+  }
+  if (!password) return Promise.reject(new Error('비밀번호를 입력해 주세요.'));
+  return postAuth('/api/auth/login-password', { email: normalizedEmail, password });
+}
+
+export function completeProfile({ password, displayName, studentId }) {
+  return postAuth('/api/auth/complete-profile', { password, displayName, studentId });
+}
+
 export async function getAuthSession() {
   const response = await fetch('/api/auth/session', { credentials: 'include', headers: { Accept: 'application/json' } });
   if (!response.ok) return null;

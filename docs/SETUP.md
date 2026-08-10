@@ -28,9 +28,10 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
 
 ## Supabase 초기 설정
 
-1. `supabase/migrations/202608090001_hanyang_email_auth.sql`을 Supabase SQL Editor 또는 migration workflow로 실행한다.
-2. Authentication → Hooks → Before User Created에 `public.restrict_hanyang_email`을 등록한다.
-3. Authentication → Email Templates의 Magic Link/OTP 템플릿에 8자리 토큰을 표시한다.
+1. `supabase/migrations/202608090001_hanyang_email_auth.sql`을 실행한다.
+2. `supabase/migrations/202608100002_password_profile.sql`을 실행한다. 학번 저장 필드와 중복 방지 인덱스를 추가한다.
+3. Authentication → Hooks → Before User Created에 `public.restrict_hanyang_email`을 등록한다.
+4. Authentication → Email Templates의 Magic Link/OTP 템플릿에 8자리 토큰을 표시한다.
 
 ```html
 <h2>한양대학교 이메일 인증</h2>
@@ -39,13 +40,15 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
 <p>본인이 요청하지 않았다면 이 이메일을 무시해 주세요.</p>
 ```
 
-4. 실제 `@hanyang.ac.kr` 이메일로 OTP 발송과 인증을 테스트한다.
+5. 실제 `@hanyang.ac.kr` 이메일로 OTP 발송·인증, 회원가입 정보 저장, 로그아웃 후 비밀번호 로그인을 테스트한다.
 
 ## 인증 흐름
 
-- 학생·관리자 모두 한양대학교 이메일과 8자리 OTP를 사용한다.
+- 최초 회원가입은 한양대학교 이메일과 8자리 OTP로 이메일 소유를 확인한다.
+- 회원가입 완료 후에는 이메일 + 비밀번호로 로그인하며, 기존 OTP 가입자는 OTP 인증 후 이름·학번·비밀번호를 한 번 설정한다.
+- 회원가입 정보는 `profiles.display_name`, `profiles.student_id`, `profiles.onboarding_completed`에 저장한다.
 - 이메일은 `trim().toLowerCase()`로 정규화하고 도메인은 정확히 `hanyang.ac.kr`만 허용한다.
-- 학생 로그인과 신규 회원가입은 Supabase `signInWithOtp` → `verifyOtp` 한 흐름으로 처리한다.
+- 회원가입 이메일 확인은 Supabase `signInWithOtp` → `verifyOtp`, 비밀번호 로그인은 `signInWithPassword`로 처리한다.
 - 인증 세션은 Vercel API가 Supabase SSR 쿠키로 설정하며, access token을 `localStorage`나 `sessionStorage`에 저장하지 않는다.
 - 관리자 권한은 인증된 이메일이 정확히 `belief@hanyang.ac.kr`일 때만 부여한다. 클라이언트 UI가 아니라 API와 SQL profile trigger에서 함께 제한한다.
 - 실제 재학 여부·캠퍼스·학번·학과를 증명하지 않고, 한양대학교 이메일 소유 여부만 확인한다.
